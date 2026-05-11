@@ -1,0 +1,34 @@
+country_code,country_name,iso3,region
+AT,Austria,AUT,Western
+BE,Belgium,BEL,Western
+BG,Bulgaria,BGR,Eastern
+HR,Croatia,HRV,Eastern
+CY,Cyprus,CYP,Southern
+CZ,Czechia,CZE,Eastern
+DK,Denmark,DNK,Northern
+EE,Estonia,EST,Northern
+FI,Finland,FIN,Northern
+FR,France,FRA,Western
+DE,Germany,DEU,Western
+GR,Greece,GRC,Southern
+HU,Hungary,HUN,Eastern
+IE,Ireland,IRL,Western
+IT,Italy,ITA,Southern
+LV,Latvia,LVA,Northern
+LT,Lithuania,LTU,Northern
+LU,Luxembourg,LUX,Western
+MT,Malta,MLT,Southern
+NL,Netherlands,NLD,Western
+PL,Poland,POL,Eastern
+PT,Portugal,PRT,Southern
+RO,Romania,ROU,Eastern
+SK,Slovakia,SVK,Eastern
+SI,Slovenia,SVN,Eastern
+ES,Spain,ESP,Southern
+SE,Sweden,SWE,Northern
+NO,Norway,NOR,Northern
+CH,Switzerland,CHE,Western
+IS,Iceland,ISL,Northern
+RS,Serbia,SRB,Eastern
+MK,North Macedonia,MKD,Southern
+GB,United Kingdom,GBR,Western
