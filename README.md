@@ -4,7 +4,7 @@ Interactive data-processing and visualisation project focused on food price affo
 
 **Analytical question:** which European countries face the highest food price pressure, and how does it relate to headline inflation and household income?
 
-The dashboard combines annual Eurostat data for European countries and builds a **Food Pressure Index (FPI)** comparing food inflation with median household income growth.
+The dashboard combines annual Eurostat data for European countries and uses the **Food Affordability Gap** as the main interpretation metric: food inflation minus median income growth. It also reports the **Food Pressure Index (FPI)** as a secondary synthetic ratio.
 
 ## How To Run
 
@@ -73,7 +73,7 @@ Country codes are normalised to ISO-2. `regions.csv` stores `country_code`, `iso
 
 | Metric | Type | Description |
 | --- | --- | --- |
-| `fpi` | synthetic ratio | `food_inflation_pct / income_growth_pct`; values above 1 mean food prices grew faster than income |
+| `fpi` | synthetic ratio | `food_inflation_pct / income_growth_pct`; values above 1 mean food prices grew faster than income; negative values can occur when income growth is negative |
 | `food_inflation_pct` | % YoY | annual HICP CP01 food inflation |
 | `headline_inflation_pct` | % YoY | annual HICP CP00 all-items inflation |
 | `median_income_eur` | EUR/year | median equivalised net income |
@@ -86,20 +86,31 @@ Country codes are normalised to ISO-2. `regions.csv` stores `country_code`, `iso
 
 When `income_growth_pct` is close to zero, ETL sets FPI to missing to avoid unstable division.
 
+The dashboard also computes view-level helper metrics for the 2020-2024 comparison:
+
+| Metric | Type | Description |
+| --- | --- | --- |
+| `food_price_growth_2020_2024_pct` | % change | cumulative food price growth between 2020 and 2024 |
+| `income_growth_2020_2024_pct` | % change | cumulative median income growth between 2020 and 2024 |
+| `cumulative_affordability_gap_pct` | percentage points | cumulative food price growth minus cumulative income growth |
+
 ## Dashboard Structure
 
 | # | Section | Visualisation | Filters |
 | --- | --- | --- | --- |
-| 1 | KPI Bar | scorecards for highest FPI, average food inflation, food budget share, median FPI | year |
-| 2 | Europe Map | Plotly choropleth | year, metric |
-| 3 | Time Trends | multi-country line charts | countries, years, metric |
-| 4 | Income vs Food Inflation | scatter with OLS trend | regions, years |
-| 5 | Distributions and Anomalies | box plot, histogram, IQR outlier table | metric |
-| 6 | Correlations and PCA | Pearson/Spearman heatmap, Holm-adjusted p-values, country-year heatmap, PCA biplot | method |
-| 7 | Statistical Tests | ANOVA, Mann-Whitney, clustered bootstrap CI, Chi-square | metric |
-| 8 | Prediction and Forecast | predictive regression, panel fixed effects, ARIMA forecast | features, country |
-| 9 | Analytical Conclusions | static and filter-aware notes | global filters |
-| 10 | Data Export | CSV download for current view and full dataset | global filters |
+| 1 | KPI Bar | scorecards for largest affordability gap, average food inflation, food budget share, median gap | year |
+| 2 | Country Diagnosis | driver metrics and driver bar for a selected country | country, year |
+| 3 | Europe Map | Plotly choropleth with missing countries greyed out | year, metric |
+| 4 | 2020-2024 Cumulative Pressure | bar ranking and table comparing food price growth with income growth | countries, regions |
+| 5 | Country Typology | segment scatter and segment counts | year |
+| 6 | Time Trends | multi-country line charts for food inflation and affordability gap | countries, years |
+| 7 | Income vs Food Inflation | scatter with OLS trend | regions, years |
+| 8 | Distributions and Anomalies | box plot, histogram, Z-score outlier table | metric |
+| 9 | Correlations and PCA | Pearson/Spearman heatmap, Holm-adjusted p-values, country-year heatmap, PCA biplot, scree plot | method |
+| 10 | Statistical Tests | ANOVA, Mann-Whitney, bootstrap CI, Chi-square | metric |
+| 11 | Prediction and Forecast | predictive regression, panel fixed effects, ARIMA forecast | features, country |
+| 12 | Analytical Conclusions and Limitations | filter-aware notes and interpretation caveats | global filters |
+| 13 | Data Export | CSV download for current view and full dataset | global filters |
 
 All sections respond to global sidebar filters.
 
@@ -135,11 +146,17 @@ europe-food-affordability/
 
 ## Method Notes
 
-The project uses clustered bootstrap confidence intervals for regional means by resampling whole countries instead of individual country-year rows.
+The project uses bootstrap confidence intervals for regional means in the selected reference year. Each country appears once in that section, so the resampling unit is the country observation.
 
 ANOVA is reported with Kruskal-Wallis and Levene checks because regional distributions can be skewed and heteroskedastic.
 
 Pairwise regional tests use Mann-Whitney U with Holm-Bonferroni correction. Correlation tables also report Holm-adjusted p-values.
+
+Outlier tables rank country-year observations by the absolute Z-score of the selected metric. This highlights values farthest from the current filtered mean.
+
+Country typology is rule-based and uses current-filter medians of the affordability gap, food spending share, income, and meal deprivation. It is intended as an interpretation aid, not a formal clustering model.
+
+PCA is fitted on standardised variables, so features measured in EUR, percentages, and indices are comparable. The biplot shows country-year similarity in the first two components, while the scree plot shows how much variance each component explains.
 
 The predictive regression excludes `income_growth_pct` by default because it is part of the FPI target definition. Including it is available in the UI only to demonstrate target leakage.
 
@@ -148,3 +165,10 @@ The predictive regression excludes `income_growth_pct` by default because it is 
 Eurostat is migrating PPP data to COICOP 2018 in `prc_ppp_ind_1`; the ETL first tries the newer source and falls back to `prc_ppp_ind` for historical food price-level data.
 
 The dashboard is exploratory. It describes observed relationships and does not establish causality.
+
+Main interpretation limits:
+
+- country-level aggregates do not show inequality within countries;
+- some missing values are interpolated in ETL;
+- FPI is sensitive when income growth is close to zero or negative, so the affordability gap is the safer headline metric;
+- 2020-2024 cumulative comparisons require data in both endpoint years and do not replace full time-series interpretation.

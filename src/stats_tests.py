@@ -1,12 +1,24 @@
 """Statistical tests used by the Streamlit dashboard."""
 from __future__ import annotations
 
+from dataclasses import dataclass
 from itertools import combinations
 
 import numpy as np
 import pandas as pd
 from scipy import stats
 from statsmodels.stats.multitest import multipletests
+
+
+@dataclass
+class RegionTestResult:
+    anova_stat: float
+    anova_p: float
+    kruskal_stat: float
+    kruskal_p: float
+    levene_stat: float
+    levene_p: float
+    pairwise: pd.DataFrame
 
 
 def _eta_squared(groups: list[np.ndarray]) -> float:
@@ -192,4 +204,112 @@ def chi_square_region_pressure(
             index=contingency.index,
             columns=contingency.columns,
         ),
+    }
+
+
+def region_anova(df: pd.DataFrame, metric: str, region_col: str = "region") -> RegionTestResult:
+    """Return regional ANOVA/Kruskal/Levene results in the shape expected by the dashboard."""
+    result = anova_regions(df, metric, region_col=region_col)
+    if result["n_groups"] < 2:
+        raise ValueError("At least two regions with two or more observations are required.")
+
+    return RegionTestResult(
+        anova_stat=result["f"],
+        anova_p=result["p"],
+        kruskal_stat=result["h"],
+        kruskal_p=result["p_kruskal"],
+        levene_stat=result["levene_w"],
+        levene_p=result["levene_p"],
+        pairwise=pairwise_mann_whitney(df, metric, region_col=region_col),
+    )
+
+
+def pvalue_matrix(
+    df: pd.DataFrame,
+    cols: list[str],
+    method: str = "pearson",
+    correction: str = "holm",
+) -> pd.DataFrame:
+    """Symmetric matrix of Holm-adjusted pairwise correlation p-values."""
+    out = pd.DataFrame(np.nan, index=cols, columns=cols, dtype=float)
+    for col in cols:
+        out.loc[col, col] = 0.0
+
+    pairs = []
+    p_values = []
+    for a, b in combinations(cols, 2):
+        sub = df[[a, b]].dropna()
+        if len(sub) < 4 or sub[a].nunique() < 2 or sub[b].nunique() < 2:
+            continue
+        if method == "spearman":
+            _, p_value = stats.spearmanr(sub[a], sub[b])
+        else:
+            _, p_value = stats.pearsonr(sub[a], sub[b])
+        pairs.append((a, b))
+        p_values.append(float(p_value))
+
+    if p_values:
+        _, adjusted, _, _ = multipletests(p_values, alpha=0.05, method=correction)
+        for (a, b), p_value in zip(pairs, adjusted):
+            out.loc[a, b] = float(p_value)
+            out.loc[b, a] = float(p_value)
+    return out
+
+
+def bootstrap_region_means(
+    df: pd.DataFrame,
+    metric: str,
+    region_col: str = "region",
+    n_boot: int = 2000,
+    seed: int = 42,
+) -> pd.DataFrame:
+    """Bootstrap regional means and 95% confidence intervals for a metric."""
+    rng = np.random.default_rng(seed)
+    rows = []
+
+    for region, group in df.groupby(region_col):
+        values = group[metric].dropna().to_numpy()
+        if len(values) == 0:
+            continue
+        means = [rng.choice(values, size=len(values), replace=True).mean() for _ in range(n_boot)]
+        ci_low, ci_high = np.percentile(means, [2.5, 97.5])
+        rows.append(
+            {
+                region_col: region,
+                "mean": float(values.mean()),
+                "ci_low": float(ci_low),
+                "ci_high": float(ci_high),
+                "n": int(len(values)),
+            }
+        )
+
+    return pd.DataFrame(rows).sort_values("mean", ascending=False).reset_index(drop=True)
+
+
+def top_outliers(df: pd.DataFrame, metric: str, n: int = 10) -> pd.DataFrame:
+    """Return observations with the largest absolute z-scores for the selected metric."""
+    sub = df.dropna(subset=[metric]).copy()
+    if sub.empty:
+        sub["zscore"] = pd.Series(dtype=float)
+        return sub
+
+    std = sub[metric].std(ddof=0)
+    if std == 0 or np.isnan(std):
+        sub["zscore"] = 0.0
+    else:
+        sub["zscore"] = (sub[metric] - sub[metric].mean()) / std
+    return sub.sort_values("zscore", key=lambda s: s.abs(), ascending=False).head(n)
+
+
+def chi_square_high_pressure(df: pd.DataFrame, value_col: str = "fpi") -> dict | None:
+    """Adapt the regional pressure chi-square result for the dashboard display."""
+    result = chi_square_region_pressure(df, metric=value_col)
+    if "error" in result:
+        return None
+    return {
+        "chi2": result["chi2"],
+        "p_value": result["p"],
+        "dof": result["dof"],
+        "cramers_v": result["cramers_v"],
+        "table": result["contingency"],
     }

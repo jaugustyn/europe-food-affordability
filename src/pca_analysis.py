@@ -24,10 +24,11 @@ def fit_pca(
     feats = features or DEFAULT_PCA_FEATURES
     sub = df[feats + ["country_name", "year", "region"]].dropna().copy()
     if len(sub) < n_components + 5:
-        return {"error": f"Too few observations ({len(sub)}) for PCA."}
+        raise ValueError(f"Za mało kompletnych obserwacji ({len(sub)}) do PCA.")
 
     X = StandardScaler().fit_transform(sub[feats].values)
-    pca = PCA(n_components=n_components, random_state=42)
+    max_components = min(len(feats), len(sub))
+    pca = PCA(n_components=max_components, random_state=42)
     coords = pca.fit_transform(X)
 
     embedding = sub[["country_name", "year", "region"]].copy()
@@ -35,15 +36,21 @@ def fit_pca(
         embedding[f"PC{i + 1}"] = coords[:, i]
 
     loadings = pd.DataFrame(
-        pca.components_.T,
+        pca.components_[:n_components].T,
         index=feats,
         columns=[f"PC{i + 1}" for i in range(n_components)],
-    )
+    ).reset_index(names="feature")
+
+    explained_full = pca.explained_variance_ratio_.tolist()
+    explained = explained_full[:n_components]
 
     return {
         "embedding": embedding,
+        "scores": embedding,
         "loadings": loadings,
-        "explained_variance_ratio": pca.explained_variance_ratio_.tolist(),
+        "explained_variance_ratio": explained,
+        "explained_variance": explained,
+        "explained_variance_full": explained_full,
         "n": len(sub),
         "features": feats,
     }
