@@ -22,6 +22,8 @@ DEFAULT_FEATURES = [
     "meal_deprivation_pct",
 ]
 
+DEFAULT_TARGET = "food_affordability_gap_pct"
+
 
 @dataclass
 class ModelSummary:
@@ -32,28 +34,36 @@ class ModelSummary:
     predictions: pd.DataFrame
 
 
-def _training_frame(df: pd.DataFrame, features: Sequence[str]) -> pd.DataFrame:
-    needed = ["fpi", "country_name", "country_code", "year", *features]
+def _training_frame(
+    df: pd.DataFrame,
+    features: Sequence[str],
+    target: str = DEFAULT_TARGET,
+) -> pd.DataFrame:
+    needed = [target, "country_name", "country_code", "year", *features]
     missing = [col for col in needed if col not in df.columns]
     if missing:
         raise ValueError(f"Missing columns for modelling: {', '.join(missing)}")
 
-    frame = df[needed].dropna(subset=["fpi"]).copy()
+    frame = df[needed].dropna(subset=[target]).copy()
     if len(frame) < 20:
-        raise ValueError("Not enough non-null FPI observations for regression modelling.")
+        raise ValueError(f"Not enough non-null {target} observations for regression modelling.")
     return frame
 
 
-def fit_fpi_regression(
+def fit_pressure_regression(
     df: pd.DataFrame,
     features: Sequence[str] = DEFAULT_FEATURES,
+    target: str = DEFAULT_TARGET,
     model_type: str = "ridge",
     random_state: int = 42,
 ) -> dict[str, object]:
-    frame = _training_frame(df, features)
+    if target in features:
+        raise ValueError("Target variable cannot also be used as a predictor.")
+
+    frame = _training_frame(df, features, target=target)
 
     x = frame[list(features)]
-    y = frame["fpi"]
+    y = frame[target]
     idx_train, idx_test = train_test_split(frame.index, test_size=0.25, random_state=random_state)
 
     if model_type == "random_forest":
@@ -92,12 +102,13 @@ def fit_fpi_regression(
         .reset_index(drop=True)
     )
 
-    predictions = frame.loc[idx_test, ["country_name", "country_code", "year", "fpi"]].copy()
-    predictions["predicted_fpi"] = y_pred
-    predictions["residual"] = predictions["fpi"] - predictions["predicted_fpi"]
+    predictions = frame.loc[idx_test, ["country_name", "country_code", "year", target]].copy()
+    predictions["predicted"] = y_pred
+    predictions["residual"] = predictions[target] - predictions["predicted"]
 
     return {
         "model_name": model_name,
+        "target": target,
         "r2_test": float(r2),
         "mae_test": float(mae),
         "feature_importance": importance_df,
@@ -106,12 +117,35 @@ def fit_fpi_regression(
     }
 
 
-def fit_panel_fixed_effects(df: pd.DataFrame, features: Sequence[str] = DEFAULT_FEATURES) -> dict[str, object]:
-    frame = _training_frame(df, features).dropna(subset=list(features)).copy()
+def fit_fpi_regression(
+    df: pd.DataFrame,
+    features: Sequence[str] = DEFAULT_FEATURES,
+    model_type: str = "ridge",
+    random_state: int = 42,
+) -> dict[str, object]:
+    """Backward-compatible wrapper for older app code or notebooks."""
+    return fit_pressure_regression(
+        df=df,
+        features=features,
+        target="fpi",
+        model_type=model_type,
+        random_state=random_state,
+    )
+
+
+def fit_panel_fixed_effects(
+    df: pd.DataFrame,
+    features: Sequence[str] = DEFAULT_FEATURES,
+    target: str = DEFAULT_TARGET,
+) -> dict[str, object]:
+    if target in features:
+        raise ValueError("Target variable cannot also be used as a predictor.")
+
+    frame = _training_frame(df, features, target=target).dropna(subset=list(features)).copy()
     if frame["country_code"].nunique() < 3 or frame["year"].nunique() < 3:
         raise ValueError("Panel fixed-effects model requires at least 3 countries and 3 years.")
 
-    formula = "fpi ~ " + " + ".join(features) + " + C(country_code) + C(year)"
+    formula = target + " ~ " + " + ".join(features) + " + C(country_code) + C(year)"
     result = smf.ols(formula, data=frame).fit(cov_type="HC3")
 
     coef = (
@@ -130,6 +164,7 @@ def fit_panel_fixed_effects(df: pd.DataFrame, features: Sequence[str] = DEFAULT_
 
     return {
         "formula": formula,
+        "target": target,
         "r2": float(result.rsquared),
         "adj_r2": float(result.rsquared_adj),
         "n": int(result.nobs),

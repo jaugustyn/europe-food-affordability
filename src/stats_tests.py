@@ -18,7 +18,13 @@ class RegionTestResult:
     kruskal_p: float
     levene_stat: float
     levene_p: float
+    eta_squared: float
     pairwise: pd.DataFrame
+
+
+def _finite_series(s: pd.Series) -> pd.Series:
+    values = pd.to_numeric(s, errors="coerce")
+    return values[np.isfinite(values)].dropna()
 
 
 def _eta_squared(groups: list[np.ndarray]) -> float:
@@ -52,7 +58,7 @@ def _cliffs_delta_label(delta: float) -> str:
 
 def anova_regions(df: pd.DataFrame, metric: str, region_col: str = "region") -> dict:
     """One-way ANOVA, Kruskal-Wallis and Levene tests by region."""
-    groups = [g[metric].dropna().values for _, g in df.groupby(region_col)]
+    groups = [_finite_series(g[metric]).values for _, g in df.groupby(region_col)]
     groups = [g for g in groups if len(g) >= 2]
     if len(groups) < 2:
         return {
@@ -89,7 +95,7 @@ def pairwise_mann_whitney(
 ) -> pd.DataFrame:
     """Two-sided Mann-Whitney U for every pair of regions."""
     rows = []
-    by_region = {r: g[metric].dropna().values for r, g in df.groupby(region_col)}
+    by_region = {r: _finite_series(g[metric]).values for r, g in df.groupby(region_col)}
     for a, b in combinations(sorted(by_region), 2):
         x, y = by_region[a], by_region[b]
         if len(x) < 3 or len(y) < 3:
@@ -124,10 +130,24 @@ def correlation_matrix(
     cols: list[str],
     method: str = "pearson",
 ) -> pd.DataFrame:
-    sub = df[cols].dropna()
-    if method == "spearman":
-        return sub.corr(method="spearman")
-    return sub.corr(method="pearson")
+    """Pairwise correlation matrix using the same pairwise sample logic as p-values."""
+    out = pd.DataFrame(np.nan, index=cols, columns=cols, dtype=float)
+    for col in cols:
+        values = _finite_series(df[col]) if col in df.columns else pd.Series(dtype=float)
+        if len(values) > 0:
+            out.loc[col, col] = 1.0
+
+    for a, b in combinations(cols, 2):
+        sub = df[[a, b]].replace([np.inf, -np.inf], np.nan).dropna()
+        if len(sub) < 2 or sub[a].nunique() < 2 or sub[b].nunique() < 2:
+            continue
+        if method == "spearman":
+            r, _ = stats.spearmanr(sub[a], sub[b])
+        else:
+            r, _ = stats.pearsonr(sub[a], sub[b])
+        out.loc[a, b] = float(r)
+        out.loc[b, a] = float(r)
+    return out
 
 
 def correlation_significance(
@@ -139,7 +159,7 @@ def correlation_significance(
     """Pairwise correlations with p-values and multiple-testing correction."""
     rows = []
     for a, b in combinations(cols, 2):
-        sub = df[[a, b]].dropna()
+        sub = df[[a, b]].replace([np.inf, -np.inf], np.nan).dropna()
         if len(sub) < 4 or sub[a].nunique() < 2 or sub[b].nunique() < 2:
             continue
         if method == "spearman":
@@ -173,6 +193,7 @@ def chi_square_region_pressure(
     """Test independence of region and a quantile-binned pressure metric."""
     bin_labels = ["low", "medium", "high"][:n_bins]
     sub = df[[region_col, metric]].dropna().copy()
+    sub = sub[np.isfinite(sub[metric])]
     if len(sub) < n_bins * 2:
         return {"error": f"Too few observations ({len(sub)}) for Chi-square."}
 
@@ -220,8 +241,41 @@ def region_anova(df: pd.DataFrame, metric: str, region_col: str = "region") -> R
         kruskal_p=result["p_kruskal"],
         levene_stat=result["levene_w"],
         levene_p=result["levene_p"],
+        eta_squared=result["eta_squared"],
         pairwise=pairwise_mann_whitney(df, metric, region_col=region_col),
     )
+
+
+def shapiro_by_region(df: pd.DataFrame, metric: str, region_col: str = "region") -> pd.DataFrame:
+    """Shapiro-Wilk normality diagnostics by region."""
+    rows = []
+    for region, group in df.groupby(region_col):
+        values = _finite_series(group[metric]).values
+        if len(values) < 3:
+            rows.append({
+                region_col: region,
+                "n": int(len(values)),
+                "w": np.nan,
+                "p_value": np.nan,
+                "normal_05": np.nan,
+                "note": "Too few observations",
+            })
+            continue
+        sample = values
+        note = ""
+        if len(values) > 5000:
+            sample = values[:5000]
+            note = "First 5000 observations used"
+        w, p = stats.shapiro(sample)
+        rows.append({
+            region_col: region,
+            "n": int(len(values)),
+            "w": float(w),
+            "p_value": float(p),
+            "normal_05": bool(p >= 0.05),
+            "note": note,
+        })
+    return pd.DataFrame(rows).sort_values(region_col).reset_index(drop=True)
 
 
 def pvalue_matrix(
@@ -238,7 +292,7 @@ def pvalue_matrix(
     pairs = []
     p_values = []
     for a, b in combinations(cols, 2):
-        sub = df[[a, b]].dropna()
+        sub = df[[a, b]].replace([np.inf, -np.inf], np.nan).dropna()
         if len(sub) < 4 or sub[a].nunique() < 2 or sub[b].nunique() < 2:
             continue
         if method == "spearman":
@@ -289,6 +343,7 @@ def bootstrap_region_means(
 def top_outliers(df: pd.DataFrame, metric: str, n: int = 10) -> pd.DataFrame:
     """Return observations with the largest absolute z-scores for the selected metric."""
     sub = df.dropna(subset=[metric]).copy()
+    sub = sub[np.isfinite(sub[metric])]
     if sub.empty:
         sub["zscore"] = pd.Series(dtype=float)
         return sub
@@ -311,5 +366,7 @@ def chi_square_high_pressure(df: pd.DataFrame, value_col: str = "fpi") -> dict |
         "p_value": result["p"],
         "dof": result["dof"],
         "cramers_v": result["cramers_v"],
+        "min_expected": result["min_expected"],
+        "expected": result["expected"],
         "table": result["contingency"],
     }

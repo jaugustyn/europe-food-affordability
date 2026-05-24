@@ -56,6 +56,22 @@ def _apply_layout(fig: go.Figure, title: str | None = None, legend_title: str = 
     return fig
 
 
+def _empty_figure(title: str, message: str = "Brak danych dla wybranych filtrów") -> go.Figure:
+    fig = go.Figure()
+    fig.add_annotation(
+        text=message,
+        x=0.5,
+        y=0.5,
+        xref="paper",
+        yref="paper",
+        showarrow=False,
+        font=dict(size=14, color="#64748b"),
+    )
+    fig.update_xaxes(visible=False)
+    fig.update_yaxes(visible=False)
+    return _apply_layout(fig, title)
+
+
 def choropleth(
     df: pd.DataFrame,
     value: str,
@@ -147,8 +163,17 @@ def line_trend(
 
 
 def scatter_income(df: pd.DataFrame, year: int) -> go.Figure:
+    title = f"Dochód gospodarstw domowych vs inflacja żywności · {year}"
     d = df[df["year"] == year].copy()
-    d["food_spending_share"] = d["food_share_budget_pct"].round(1)
+    d = d.dropna(subset=["median_income_eur", "food_inflation_pct"]).copy()
+    d = d[np.isfinite(d["median_income_eur"]) & np.isfinite(d["food_inflation_pct"])]
+    if d.empty:
+        return _empty_figure(title)
+
+    fallback_size = d["food_share_budget_pct"].dropna().median()
+    if pd.isna(fallback_size) or fallback_size <= 0:
+        fallback_size = 1.0
+    d["food_spending_share"] = d["food_share_budget_pct"].fillna(fallback_size).clip(lower=0.1).round(1)
     d["region_label"] = d["region"].map(REGION_LABELS_PL).fillna(d["region"])
     fig = px.scatter(
         d,
@@ -166,8 +191,6 @@ def scatter_income(df: pd.DataFrame, year: int) -> go.Figure:
         },
         color_discrete_map=REGION_COLORS_PL,
         category_orders={"region_label": [REGION_LABELS_PL[r] for r in REGION_ORDER]},
-        trendline="ols",
-        trendline_scope="overall",
         labels={
             "median_income_eur": "Mediana dochodu ekwiwalentnego (EUR/rok)",
             "food_inflation_pct": "Inflacja żywności (%)",
@@ -175,14 +198,19 @@ def scatter_income(df: pd.DataFrame, year: int) -> go.Figure:
             "food_spending_share": "Udział wydatków na żywność (%)",
         },
     )
+    trend = d[["median_income_eur", "food_inflation_pct"]].dropna().sort_values("median_income_eur")
+    if len(trend) >= 2 and trend["median_income_eur"].nunique() >= 2:
+        slope, intercept = np.polyfit(trend["median_income_eur"], trend["food_inflation_pct"], 1)
+        fig.add_scatter(
+            x=trend["median_income_eur"],
+            y=slope * trend["median_income_eur"] + intercept,
+            mode="lines",
+            name="Trend OLS",
+            line=dict(color="#0f172a", width=2.4, dash="dash"),
+            hovertemplate="Trend OLS<extra></extra>",
+        )
     fig.update_traces(marker=dict(opacity=0.82, line=dict(width=0.7, color="white")), selector=dict(mode="markers"))
-    fig.update_traces(
-        name="Trend OLS",
-        line=dict(color="#0f172a", width=2.4, dash="dash"),
-        showlegend=True,
-        selector=dict(mode="lines"),
-    )
-    return _apply_layout(fig, f"Dochód gospodarstw domowych vs inflacja żywności · {year}")
+    return _apply_layout(fig, title)
 
 
 def driver_bar(row: pd.Series, country_label: str, year: int) -> go.Figure:
@@ -254,6 +282,7 @@ def cumulative_gap_bar(summary: pd.DataFrame, top_n: int = 15) -> go.Figure:
 
 
 def typology_scatter(df: pd.DataFrame, year: int) -> go.Figure:
+    title = f"Typologia krajów według presji i dochodu · {year}"
     d = df.dropna(
         subset=[
             "median_income_eur",
@@ -262,8 +291,10 @@ def typology_scatter(df: pd.DataFrame, year: int) -> go.Figure:
             "pressure_segment",
         ]
     ).copy()
+    d = d[np.isfinite(d["median_income_eur"]) & np.isfinite(d["food_affordability_gap_pct"])]
     if d.empty:
-        return go.Figure()
+        return _empty_figure(title)
+    d["food_share_budget_pct"] = d["food_share_budget_pct"].clip(lower=0.1)
     fig = px.scatter(
         d,
         x="median_income_eur",
@@ -291,11 +322,15 @@ def typology_scatter(df: pd.DataFrame, year: int) -> go.Figure:
     )
     fig.add_hline(y=0, line_dash="dash", line_color="#64748b")
     fig.update_traces(marker=dict(opacity=0.82, line=dict(width=0.7, color="white")))
-    return _apply_layout(fig, f"Typologia krajów według presji i dochodu · {year}", legend_title="Typ kraju")
+    return _apply_layout(fig, title, legend_title="Typ kraju")
 
 
 def boxplot_region(df: pd.DataFrame, value: str, year: int, title: str) -> go.Figure:
-    d = df[df["year"] == year].copy()
+    fig_title = f"{title} według regionu · {year}"
+    d = df[df["year"] == year].dropna(subset=[value]).copy()
+    d = d[np.isfinite(d[value])]
+    if d.empty:
+        return _empty_figure(fig_title)
     d["region_label"] = d["region"].map(REGION_LABELS_PL).fillna(d["region"])
     fig = px.box(
         d,
@@ -309,11 +344,15 @@ def boxplot_region(df: pd.DataFrame, value: str, year: int, title: str) -> go.Fi
         labels={"region_label": "Region", value: title},
     )
     fig.update_layout(showlegend=False)
-    return _apply_layout(fig, f"{title} według regionu · {year}")
+    return _apply_layout(fig, fig_title)
 
 
 def histogram(df: pd.DataFrame, value: str, year: int, title: str) -> go.Figure:
-    d = df[df["year"] == year].copy()
+    fig_title = f"Rozkład: {title} · {year}"
+    d = df[df["year"] == year].dropna(subset=[value]).copy()
+    d = d[np.isfinite(d[value])]
+    if d.empty:
+        return _empty_figure(fig_title)
     d["region_label"] = d["region"].map(REGION_LABELS_PL).fillna(d["region"])
     fig = px.histogram(
         d,
@@ -326,7 +365,7 @@ def histogram(df: pd.DataFrame, value: str, year: int, title: str) -> go.Figure:
         labels={value: title, "region_label": "Region"},
     )
     fig.update_yaxes(title="Liczba obserwacji")
-    return _apply_layout(fig, f"Rozkład: {title} · {year}")
+    return _apply_layout(fig, fig_title)
 
 
 def heatmap_corr(corr: pd.DataFrame, title: str = "Korelacje metryk") -> go.Figure:
@@ -389,18 +428,25 @@ def heatmap_country_year(df: pd.DataFrame, value: str, title: str) -> go.Figure:
     return _apply_layout(fig, title)
 
 
-def residuals_plot(predictions: pd.DataFrame) -> go.Figure:
+def residuals_plot(
+    predictions: pd.DataFrame,
+    target_label: str = "Wartość docelowa",
+) -> go.Figure:
     predictions = predictions.copy()
     if "region" in predictions.columns:
         predictions["region_label"] = predictions["region"].map(REGION_LABELS_PL).fillna(predictions["region"])
     fig = px.scatter(
         predictions,
-        x="predicted_fpi",
+        x="predicted",
         y="residual",
         color="region_label" if "region_label" in predictions.columns else None,
         hover_name="country_name",
         color_discrete_map=REGION_COLORS_PL,
-        labels={"predicted_fpi": "Prognozowany FPI", "residual": "Reszta (FPI - prognoza)", "region_label": "Region"},
+        labels={
+            "predicted": f"Prognozowana wartość: {target_label}",
+            "residual": "Reszta (wartość rzeczywista - prognoza)",
+            "region_label": "Region",
+        },
     )
     fig.add_hline(y=0, line_dash="dash", line_color="#334155")
     return _apply_layout(fig, "Reszty modelu")
@@ -519,6 +565,22 @@ def forecast_plot(history: pd.DataFrame, forecast: pd.DataFrame, country_label: 
         name="Prognoza",
         line=dict(color="#ef4444", width=3, dash="dash"),
     )
+    if "baseline_last" in forecast.columns:
+        fig.add_scatter(
+            x=forecast["year"],
+            y=forecast["baseline_last"],
+            mode="lines+markers",
+            name="Baseline: ostatnia wartość",
+            line=dict(color="#475569", width=2, dash="dot"),
+        )
+    if "baseline_recent_mean" in forecast.columns:
+        fig.add_scatter(
+            x=forecast["year"],
+            y=forecast["baseline_recent_mean"],
+            mode="lines+markers",
+            name="Baseline: średnia z 3 lat",
+            line=dict(color="#0f766e", width=2, dash="dot"),
+        )
     fig.add_scatter(
         x=forecast["year"],
         y=forecast["lower"],

@@ -10,13 +10,14 @@ from src.data_loader import load_data, load_exclusions
 from src.forecast import forecast_food_inflation
 from src.metrics import KEY_METRICS, METRICS, fmt
 from src.pca_analysis import fit_pca
-from src.regression import DEFAULT_FEATURES, fit_fpi_regression, fit_panel_fixed_effects
+from src.regression import DEFAULT_FEATURES, fit_panel_fixed_effects, fit_pressure_regression
 from src.stats_tests import (
     bootstrap_region_means,
     chi_square_high_pressure,
     correlation_matrix,
     pvalue_matrix,
     region_anova,
+    shapiro_by_region,
     top_outliers,
 )
 from src.viz import (
@@ -74,7 +75,7 @@ METRIC_LABELS_PL = {
 }
 
 METRIC_DESCRIPTIONS_PL = {
-    "fpi": "Wskaźnik syntetyczny: inflacja żywności (%) / wzrost mediany dochodu (%). Wartości powyżej 1 oznaczają, że ceny żywności rosły szybciej niż dochody. Gdy dochód spada, FPI może być ujemny, więc warto porównać go z luką dostępności.",
+    "fpi": "Wskaźnik syntetyczny: inflacja żywności (%) / wzrost mediany dochodu (%). Wartości powyżej 1 oznaczają, że ceny żywności rosły szybciej niż dochody. Przy ujemnym wzroście dochodu FPI może być ujemny, dlatego główną metryką interpretacyjną pozostaje luka dostępności.",
     "food_inflation_pct": "Roczna średnia zmiana zharmonizowanego indeksu cen żywności i napojów bezalkoholowych.",
     "headline_inflation_pct": "Roczna średnia zmiana zharmonizowanego indeksu cen dla wszystkich kategorii.",
     "food_share_budget_pct": "Udział żywności i napojów bezalkoholowych w wydatkach konsumpcyjnych gospodarstw domowych.",
@@ -90,6 +91,29 @@ METRIC_DESCRIPTIONS_PL = {
     "cumulative_affordability_gap_pct": "Skumulowany wzrost cen żywności minus skumulowany wzrost dochodu. Dodatni wynik oznacza pogorszenie dostępności w latach 2020-2024.",
 }
 
+METRIC_DIRECTIONS_PL = {
+    "fpi": "Wyższa wartość wskazuje większą presję cenową, lecz wskaźnik wymaga ostrożności przy niskim albo ujemnym wzroście dochodu.",
+    "food_inflation_pct": "Wyższa wartość oznacza szybszy wzrost cen żywności i większe obciążenie konsumentów.",
+    "headline_inflation_pct": "Wyższa wartość oznacza szybszy wzrost ogólnego poziomu cen w gospodarce.",
+    "food_share_budget_pct": "Wyższa wartość oznacza większą wrażliwość budżetu gospodarstw domowych na ceny żywności.",
+    "median_income_eur": "Wyższa wartość oznacza większy nominalny bufor dochodowy gospodarstw domowych.",
+    "income_growth_pct": "Wyższa wartość oznacza szybszy wzrost dochodów i większą zdolność kompensowania wzrostu cen.",
+    "minimum_wage_eur_month": "Wyższa wartość oznacza wyższą nominalną płacę minimalną; pełna ocena wymaga zestawienia z poziomem cen.",
+    "food_price_level_index": "Wyższa wartość oznacza wyższy poziom cen żywności względem średniej UE.",
+    "meal_deprivation_pct": "Wyższa wartość oznacza większy odsetek osób bez możliwości regularnego pełnowartościowego posiłku.",
+    "food_affordability_gap_pct": "Wyższa wartość oznacza gorszą dostępność. Wartość dodatnia wskazuje, że ceny żywności rosną szybciej niż dochody.",
+    "food_inflation_index_2020": "Wyższa wartość oznacza wyższy skumulowany poziom cen żywności względem 2020 roku.",
+    "food_price_growth_2020_2024_pct": "Wyższa wartość oznacza silniejszy skumulowany wzrost cen żywności od 2020 roku.",
+    "income_growth_2020_2024_pct": "Wyższa wartość oznacza silniejszy skumulowany wzrost dochodów od 2020 roku.",
+    "cumulative_affordability_gap_pct": "Wyższa wartość oznacza gorszą dostępność. Wartość dodatnia wskazuje, że od 2020 roku ceny żywności wzrosły mocniej niż dochody.",
+}
+
+CUSTOM_METRIC_UNITS = {
+    "food_price_growth_2020_2024_pct": "%",
+    "income_growth_2020_2024_pct": "%",
+    "cumulative_affordability_gap_pct": "p.p.",
+}
+
 MAP_METRICS = [
     "food_affordability_gap_pct",
     "fpi",
@@ -97,6 +121,22 @@ MAP_METRICS = [
     "food_share_budget_pct",
     "food_price_level_index",
     "meal_deprivation_pct",
+]
+
+METRIC_REFERENCE = [
+    "food_affordability_gap_pct",
+    "fpi",
+    "food_inflation_pct",
+    "headline_inflation_pct",
+    "median_income_eur",
+    "income_growth_pct",
+    "food_share_budget_pct",
+    "food_price_level_index",
+    "meal_deprivation_pct",
+    "food_inflation_index_2020",
+    "food_price_growth_2020_2024_pct",
+    "income_growth_2020_2024_pct",
+    "cumulative_affordability_gap_pct",
 ]
 
 SECTION_HELP_PL = {
@@ -110,7 +150,7 @@ SECTION_HELP_PL = {
     "distributions": "Box plot pokazuje medianę, typowy zakres wartości i obserwacje skrajne między regionami. Histogram pokazuje, gdzie skupia się większość krajów. Tabela Z-score wskazuje obserwacje najbardziej oddalone od średniej dla aktualnych filtrów.",
     "correlations": "Korelacja mieści się od -1 do 1: wartości blisko 1 rosną razem, blisko -1 poruszają się przeciwnie, a blisko 0 nie mają prostej zależności. p-value pomaga ocenić, czy zależność może być przypadkowa. PCA streszcza kilka podobnych metryk do dwóch osi, żeby zobaczyć podobieństwa krajów.",
     "tests": "Testy statystyczne sprawdzają, czy różnice między regionami są większe niż losowe wahania danych. p-value poniżej 0,05 traktujemy jako sygnał istotności, a przedziały ufności pokazują niepewność średnich.",
-    "prediction": "Modele predykcyjne próbują odtworzyć FPI na podstawie innych zmiennych. Reszty pokazują błędy modelu, efekty stałe kontrolują stałe różnice między krajami, a prognoza ARIMA ekstrapoluje sam trend inflacji żywności.",
+    "prediction": "Modele predykcyjne próbują odtworzyć lukę dostępności żywności na podstawie innych zmiennych. Reszty pokazują błędy modelu, efekty stałe kontrolują stałe różnice między krajami, a prognoza ARIMA ekstrapoluje sam trend inflacji żywności.",
     "conclusions": "Wnioski są generowane z aktualnie przefiltrowanych danych. Zmiana lat, regionów lub krajów może zmienić ranking, korelacje i średnie. Ograniczenia pomagają nie interpretować dashboardu jako modelu przyczynowego.",
     "export": "Eksport zapisuje dokładnie ten wycinek danych, który widzisz po zastosowaniu filtrów. To ułatwia dalszą analizę lub dołączenie tabeli do raportu.",
 }
@@ -132,8 +172,12 @@ COLUMN_LABELS = {
     "year": "Rok",
     "zscore": "Z-score",
     "forecast": "Prognoza",
+    "predicted": "Prognoza modelu",
+    "residual": "Reszta modelu",
     "lower": "Dolna granica",
     "upper": "Górna granica",
+    "baseline_last": "Baseline: ostatnia wartość",
+    "baseline_recent_mean": "Baseline: średnia z 3 lat",
     **METRIC_LABELS_PL,
 }
 
@@ -151,6 +195,22 @@ def metric_label(metric: str) -> str:
 
 def metric_description(metric: str) -> str:
     return METRIC_DESCRIPTIONS_PL.get(metric, METRICS[metric]["desc"] if metric in METRICS else "")
+
+
+def metric_direction(metric: str) -> str:
+    return METRIC_DIRECTIONS_PL.get(metric, "Kierunek interpretacji zależy od kontekstu.")
+
+
+def metric_unit(metric: str) -> str:
+    if metric in METRICS:
+        return METRICS[metric]["unit"]
+    return CUSTOM_METRIC_UNITS.get(metric, "")
+
+
+def metric_help(metric: str) -> str:
+    desc = metric_description(metric)
+    direction = metric_direction(metric)
+    return f"{desc} {direction}".strip()
 
 
 def fmt_p(value: float) -> str:
@@ -330,6 +390,124 @@ def pressure_driver_notes(row: pd.Series, reference_frame: pd.DataFrame) -> list
     return notes
 
 
+def country_list(frame: pd.DataFrame, value_col: str, n: int = 3, ascending: bool = False) -> str:
+    rows = frame.dropna(subset=[value_col]).sort_values(value_col, ascending=ascending).head(n)
+    if rows.empty:
+        return "brak danych"
+    return ", ".join(f"{row['country_name']} ({row[value_col]:+.1f})" for _, row in rows.iterrows())
+
+
+def structural_vulnerability(frame: pd.DataFrame) -> pd.DataFrame:
+    """Rank countries by structural sensitivity to food prices."""
+    cols = ["country_name", "region", "food_share_budget_pct", "meal_deprivation_pct", "median_income_eur"]
+    sub = frame[cols].dropna().copy()
+    if len(sub) < 3:
+        return pd.DataFrame(columns=[*cols, "structural_vulnerability_score"])
+
+    def zscore(series: pd.Series) -> pd.Series:
+        std = series.std(ddof=0)
+        if pd.isna(std) or std == 0:
+            return pd.Series(0.0, index=series.index)
+        return (series - series.mean()) / std
+
+    sub["structural_vulnerability_score"] = (
+        zscore(sub["food_share_budget_pct"])
+        + zscore(sub["meal_deprivation_pct"])
+        - zscore(sub["median_income_eur"])
+    )
+    return sub.sort_values("structural_vulnerability_score", ascending=False)
+
+
+def interpret_current_situation(current_frame: pd.DataFrame, current_year: int) -> list[str]:
+    """Generate data-driven conclusions for the latest year available in the dashboard dataset."""
+    current = current_frame.dropna(subset=["food_affordability_gap_pct"]).copy()
+    if current.empty:
+        return [f"Dla roku {current_year} brakuje kompletnych danych do oceny bieżącej sytuacji."]
+
+    n_countries = len(current)
+    positive_gap = current[current["food_affordability_gap_pct"] > 0]
+    median_gap = current["food_affordability_gap_pct"].median()
+    median_food = current["food_inflation_pct"].median()
+    median_income_growth = current["income_growth_pct"].median()
+
+    if len(positive_gap) == 0:
+        pressure_note = (
+            f"W ostatnim roku danych (**{current_year}**) krótkoterminowa presja cenowa jest ograniczona w tym przekroju: "
+            f"w żadnym z {n_countries} wybranych krajów ceny żywności nie zwiększyły luki względem dochodów. "
+            f"Mediana luki wynosi {median_gap:+.1f} p.p."
+        )
+    else:
+        pressure_note = (
+            f"W ostatnim roku danych (**{current_year}**) bieżąca presja jest skoncentrowana, a nie powszechna: "
+            f"dodatnią lukę dostępności ma {len(positive_gap)} z {n_countries} wybranych krajów. "
+            f"Najbardziej widoczne wyjątki to {country_list(positive_gap, 'food_affordability_gap_pct', n=3)} p.p."
+        )
+
+    typical_note = (
+        f"Typowa sytuacja w {current_year} r. wskazuje na fazę wygaszania szoku inflacyjnego: "
+        f"mediana inflacji żywności wynosi {median_food:+.1f}%, a mediana wzrostu dochodu {median_income_growth:+.1f}%. "
+        "Nie oznacza to jednak pełnego powrotu dostępności, bo poziom cen po latach 2021-2023 pozostaje podwyższony."
+    )
+
+    vulnerable = structural_vulnerability(current_frame).head(3)
+    if vulnerable.empty:
+        vulnerability_note = "Brakuje kompletnych danych, aby wskazać kraje strukturalnie najbardziej wrażliwe na ceny żywności."
+    else:
+        names = ", ".join(vulnerable["country_name"].tolist())
+        vulnerability_note = (
+            f"Sygnały podwyższonej wrażliwości społecznej nie muszą pokrywać się z najwyższą bieżącą inflacją. "
+            f"W aktualnym przekroju bardziej strukturalnie wrażliwe są: **{names}**. "
+            "Łączą one relatywnie wysoki udział żywności w budżecie, wyższą deprywację posiłku lub niższy bufor dochodowy."
+        )
+
+    return [pressure_note, typical_note, vulnerability_note]
+
+
+def interpret_cumulative_pressure(cumulative_frame: pd.DataFrame) -> list[str]:
+    if cumulative_frame.empty:
+        return ["Brak kompletnych danych dla porównania 2020-2024 w aktualnie wybranym zakresie krajów."]
+
+    top = cumulative_frame.sort_values("cumulative_affordability_gap_pct", ascending=False).head(3)
+    bottom = cumulative_frame.sort_values("cumulative_affordability_gap_pct").head(3)
+    median_cum_gap = cumulative_frame["cumulative_affordability_gap_pct"].median()
+    top_names = ", ".join(
+        f"{row.country_name} ({row.cumulative_affordability_gap_pct:+.1f} p.p.)"
+        for row in top.itertuples()
+    )
+    bottom_names = ", ".join(
+        f"{row.country_name} ({row.cumulative_affordability_gap_pct:+.1f} p.p.)"
+        for row in bottom.itertuples()
+    )
+
+    notes = [
+        (
+            "Perspektywa 2020-2024 pokazuje, czy gospodarstwa zdążyły skompensować wcześniejszy szok cenowy. "
+            f"Mediana skumulowanej luki w wybranych krajach wynosi {median_cum_gap:+.1f} p.p."
+        ),
+        (
+            f"Największy nierozwiązany efekt skumulowany widać w krajach: **{top_names}**. "
+            "W tych przypadkach poprawa w ostatnim roku nie kompensuje całej skumulowanej różnicy między wzrostem cen żywności a wzrostem dochodów."
+        ),
+        (
+            f"Najsilniejsze nominalne doganianie dochodów względem cen żywności widać w krajach: **{bottom_names}**. "
+            "Ta poprawa nie musi oznaczać wysokiej dostępności, jeżeli punkt startowy dochodów był niski."
+        ),
+    ]
+
+    regional = cumulative_frame.groupby("region")["cumulative_affordability_gap_pct"].median().dropna()
+    if not regional.empty:
+        highest_region = regional.sort_values(ascending=False).index[0]
+        lowest_region = regional.sort_values().index[0]
+        notes.append(
+            f"Regionalnie najwyższa mediana skumulowanej presji występuje w grupie "
+            f"**{REGION_LABELS_PL.get(highest_region, highest_region)}**, a najniższa w grupie "
+            f"**{REGION_LABELS_PL.get(lowest_region, lowest_region)}**. "
+            "To sugeruje, że bieżący ranking z jednego roku warto zawsze czytać razem z trendem wieloletnim."
+        )
+
+    return notes
+
+
 @st.cache_data(show_spinner=False)
 def get_data() -> pd.DataFrame:
     return load_data()
@@ -382,6 +560,11 @@ st.title(APP_TITLE)
 st.caption(
     "Dashboard do porównywania presji cen żywności, inflacji ogólnej, dochodów gospodarstw "
     "domowych i dostępności żywności w krajach Europy na podstawie danych Eurostatu."
+)
+st.info(
+    "Podstawowa interpretacja: **dodatnia luka dostępności żywności** oznacza, że ceny żywności "
+    "rosną szybciej niż dochody, co wskazuje na pogorszenie dostępności. W przypadku dochodu "
+    "i wzrostu dochodu wyższe wartości oznaczają większy bufor finansowy gospodarstw domowych."
 )
 
 st.markdown(
@@ -474,7 +657,7 @@ with kpi_cols[0]:
             "Największa luka dostępności",
             row["country_name"],
             fmt(row["food_affordability_gap_pct"], "food_affordability_gap_pct"),
-            help=metric_description("food_affordability_gap_pct"),
+            help=metric_help("food_affordability_gap_pct"),
         )
 with kpi_cols[1]:
     st.metric(
@@ -497,16 +680,20 @@ with kpi_cols[3]:
         "Mediana luki dostępności",
         fmt(median_gap, "food_affordability_gap_pct"),
         delta=f"FPI mediana: {fmt(median_fpi, 'fpi')}",
-        help=metric_description("food_affordability_gap_pct"),
+        help=metric_help("food_affordability_gap_pct"),
     )
 
-with st.expander("Definicje metryk", expanded=False):
+with st.expander("Interpretacja metryk", expanded=True):
     st.dataframe(
         pd.DataFrame(
             [
-                {"Metryka": metric_label(key), "Jednostka": meta["unit"], "Opis": metric_description(key)}
-                for key, meta in METRICS.items()
-                if key in KEY_METRICS
+                {
+                    "Metryka": metric_label(key),
+                    "Jednostka": metric_unit(key),
+                    "Opis": metric_description(key),
+                    "Interpretacja": metric_direction(key),
+                }
+                for key in METRIC_REFERENCE
             ]
         ),
         width="stretch",
@@ -537,7 +724,7 @@ driver_metrics = [
 ]
 for col, (label, metric) in zip(driver_cols, driver_metrics):
     with col:
-        st.metric(label, fmt_value(driver_row.get(metric), metric), help=metric_description(metric))
+        st.metric(label, fmt_value(driver_row.get(metric), metric), help=metric_help(metric))
 
 driver_chart, driver_notes_col = st.columns([1.15, 0.85])
 with driver_chart:
@@ -568,15 +755,15 @@ with map_controls:
         "Metryka na mapie",
         MAP_METRICS,
         format_func=metric_label,
-        help="Wybierz, czy kolor ma oznaczać presję cenową, inflację, udział żywności w budżecie, poziom cen albo deprywację posiłku.",
+        help="Kolor mapy może przedstawiać presję cenową, inflację, udział żywności w budżecie, poziom cen albo deprywację posiłku.",
     )
-    st.caption(metric_description(map_metric))
+    st.caption(f"{metric_description(map_metric)} **Interpretacja:** {metric_direction(map_metric)}")
     use_full_map_range = st.toggle(
         "Pełny zakres min-max",
         value=False,
         help=(
             "Domyślnie mapa używa stałej skali 5-95 percentyl, żeby pojedyncze skrajne wartości "
-            "nie spłaszczały kolorów. Włącz tę opcję, jeśli chcesz objąć wszystkie wartości."
+            "nie spłaszczały kolorów. Włączenie opcji obejmuje wszystkie wartości w skali min-max."
         ),
     )
 
@@ -623,7 +810,7 @@ else:
             "Największa skumulowana luka",
             top_cumulative["country_name"],
             f"{top_cumulative['cumulative_affordability_gap_pct']:+.1f} p.p.",
-            help=metric_description("cumulative_affordability_gap_pct"),
+            help=metric_help("cumulative_affordability_gap_pct"),
         )
     with cum_cols[1]:
         st.metric(
@@ -750,6 +937,7 @@ dist_metric = st.selectbox(
     ["food_affordability_gap_pct", "fpi", "food_inflation_pct", "food_share_budget_pct", "meal_deprivation_pct"],
     format_func=metric_label,
 )
+st.caption(f"{metric_description(dist_metric)} **Interpretacja:** {metric_direction(dist_metric)}")
 col_a, col_b = st.columns(2)
 with col_a:
     st.plotly_chart(boxplot_region(df_filtered, dist_metric, reference_year, metric_label(dist_metric)), width="stretch")
@@ -808,9 +996,14 @@ with col_b:
     pvals.columns = [metric_label(col) for col in pvals.columns]
     st.dataframe(pvals.map(fmt_p), width="stretch")
     st.caption(
-        "Tabela pokazuje p-value po korekcie Holma. Wartości poniżej 0,05 oznaczają, "
-        "że zależność jest mało prawdopodobna jako czysty przypadek przy wielu porównaniach."
+        "Macierz korelacji i p-value są liczone parami, na wspólnych kompletnych obserwacjach dla danej pary zmiennych. "
+        "Tabela pokazuje p-value po korekcie Holma. Wartości poniżej 0,05 oznaczają, że zależność jest mało "
+        "prawdopodobna jako czysty przypadek przy wielu porównaniach."
     )
+st.caption(
+    "Korelacja nie oznacza przyczynowości. Przy danych kraj-rok związek może wynikać także ze wspólnego trendu w czasie "
+    "albo z pominiętej cechy kraju."
+)
 
 st.plotly_chart(heatmap_country_year(df_filtered, "food_share_budget_pct", "Udział żywności w wydatkach według kraju i roku"), width="stretch")
 
@@ -827,8 +1020,17 @@ try:
     st.caption(
         f"PCA wykorzystuje {pca_result['n']} kompletnych obserwacji. "
         f"PC1 i PC2 wyjaśniają łącznie {sum(pca_result['explained_variance']) * 100:.1f}% wariancji. "
-        "Scree plot pokazuje, ile informacji wnosi każdy kolejny komponent."
+        "Scree plot pokazuje, ile informacji wnosi każdy kolejny komponent. "
+        "Liczba obserwacji PCA może być niższa od pełnego zbioru, ponieważ wszystkie cechy użyte w PCA muszą być kompletne."
     )
+    with st.expander("Dlaczego nie dodano t-SNE, UMAP, LDA ani autoenkoderów?", expanded=False):
+        st.markdown(
+            """
+- t-SNE i UMAP są efektowne wizualnie, ale przy tym zbiorze mogłyby sugerować niestabilne klastry.
+- LDA wymaga zewnętrznej etykiety klasy i celu klasyfikacyjnego, którego ta analiza nie definiuje.
+- Autoenkodery są nieadekwatne do małego, tablicowego zbioru makroekonomicznego.
+"""
+        )
 except ValueError as exc:
     st.info(str(exc))
 
@@ -843,7 +1045,15 @@ test_metric = st.selectbox(
     ["food_affordability_gap_pct", "fpi", "food_inflation_pct", "food_share_budget_pct"],
     format_func=metric_label,
 )
+st.caption(f"{metric_description(test_metric)} **Interpretacja:** {metric_direction(test_metric)}")
+st.markdown(
+    """
+**Hipotezy testów regionalnych:** H0 zakłada brak różnic między regionami dla wybranej metryki.
+H1 zakłada, że co najmniej jeden region różni się od pozostałych.
+"""
+)
 test_df = df_filtered[df_filtered["year"] == reference_year].copy()
+shapiro_diag = shapiro_by_region(test_df, test_metric)
 
 col_a, col_b = st.columns(2)
 with col_a:
@@ -860,6 +1070,37 @@ with col_a:
             width="stretch",
             hide_index=True,
         )
+        st.caption(
+            f"Eta squared dla ANOVA: {stats_result.eta_squared:.3f}. "
+            "Kruskal-Wallis jest traktowany jako bezpieczniejsza interpretacja, gdy rozkłady odbiegają od normalności "
+            "albo wariancje między regionami nie są jednorodne."
+        )
+
+        if not shapiro_diag.empty:
+            shapiro_view = shapiro_diag.copy()
+            shapiro_view["region"] = shapiro_view["region"].map(REGION_LABELS_PL).fillna(shapiro_view["region"])
+            shapiro_view["p_value"] = shapiro_view["p_value"].map(fmt_p)
+            shapiro_view["normal_05"] = shapiro_view["normal_05"].map({True: "tak", False: "nie"}).fillna("brak danych")
+            shapiro_view = shapiro_view.rename(
+                columns={
+                    "region": "Region",
+                    "n": "N",
+                    "w": "Statystyka W",
+                    "p_value": "p-value",
+                    "normal_05": "Brak podstaw do odrzucenia normalności (0,05)",
+                    "note": "Uwagi",
+                }
+            )
+            st.dataframe(shapiro_view, width="stretch", hide_index=True)
+
+        normality_issue = bool(shapiro_diag["p_value"].dropna().lt(0.05).any()) if not shapiro_diag.empty else False
+        variance_issue = pd.notna(stats_result.levene_p) and stats_result.levene_p < 0.05
+        if normality_issue or variance_issue:
+            st.info(
+                "Diagnostyka wskazuje ograniczenia dla testów parametrycznych. "
+                "W takim układzie wynik Kruskala-Wallisa i testy Manna-Whitneya są ważniejsze interpretacyjnie niż ANOVA."
+            )
+
         if not stats_result.pairwise.empty:
             pairwise = stats_result.pairwise.copy()
             pairwise["p_adj"] = pairwise["p_adj"].map(fmt_p)
@@ -895,9 +1136,21 @@ with col_b:
 
 chi2 = chi_square_high_pressure(test_df, value_col=test_metric)
 if chi2:
-    st.caption(f"Test chi-kwadrat dla klas presji cenowej według regionów: p-value {fmt_p(chi2['p_value'])}.")
+    st.caption(
+        "Test chi-kwadrat dla klas presji cenowej według regionów: "
+        f"p-value {fmt_p(chi2['p_value'])}, Cramer's V {chi2['cramers_v']:.3f}, "
+        f"minimalna oczekiwana liczność {chi2['min_expected']:.2f}."
+    )
+    if chi2["min_expected"] < 5:
+        st.warning(
+            "Minimalna oczekiwana liczność jest poniżej 5, więc wynik Chi-square ma ograniczoną wiarygodność "
+            "i powinien być traktowany jako opisowa diagnostyka zależności."
+        )
     chi_table = chi2["table"].rename(columns={"low": "niska", "medium": "średnia", "high": "wysoka"}).reset_index()
     st.dataframe(display_columns(chi_table), width="stretch", hide_index=True)
+    with st.expander("Oczekiwane liczności Chi-square", expanded=False):
+        expected = chi2["expected"].rename(columns={"low": "niska", "medium": "średnia", "high": "wysoka"}).reset_index()
+        st.dataframe(display_columns(expected), width="stretch", hide_index=True)
 
 section_anchor(
     "sec-prediction",
@@ -906,8 +1159,13 @@ section_anchor(
     help_text=SECTION_HELP_PL["prediction"],
 )
 tab_reg, tab_panel, tab_forecast = st.tabs(["Regresja", "Efekty stałe panelowe", "Prognoza"])
+prediction_target = "food_affordability_gap_pct"
 
 with tab_reg:
+    st.caption(
+        "Model predykcyjny odtwarza lukę dostępności żywności, czyli główną metrykę interpretacyjną dashboardu. "
+        "Wyniki mają charakter eksploracyjny i nie dowodzą zależności przyczynowych."
+    )
     model_type = st.radio("Model", ["ridge", "random_forest"], format_func=lambda v: "Ridge" if v == "ridge" else "Random Forest", horizontal=True)
     features = st.multiselect(
         "Predyktory",
@@ -922,27 +1180,36 @@ with tab_reg:
         format_func=metric_label,
     )
     if "income_growth_pct" in features:
-        st.warning("Wzrost dochodu nie powinien być używany jako predyktor w tym samym roku, ponieważ jest częścią wzoru FPI.")
+        st.warning("Wzrost dochodu nie powinien być używany jako predyktor w tym samym roku, ponieważ jest częścią wzoru luki dostępności.")
     try:
-        reg = fit_fpi_regression(df_filtered, features=features, model_type=model_type)
+        reg = fit_pressure_regression(
+            df_filtered,
+            features=features,
+            target=prediction_target,
+            model_type=model_type,
+        )
         col_a, col_b = st.columns(2)
         with col_a:
             st.metric("Test R²", f"{reg['r2_test']:.3f}")
-            st.metric("Test MAE", f"{reg['mae_test']:.2f}")
+            st.metric("Test MAE", f"{reg['mae_test']:.2f} p.p.")
             imp = reg["feature_importance"].copy()
             imp["feature"] = imp["feature"].map(metric_label)
             imp = imp.rename(columns={"feature": "Zmienna", "importance": "Ważność"})
             st.dataframe(imp, width="stretch", hide_index=True)
         with col_b:
             predictions = reg["predictions"].merge(df[["country_code", "year", "region"]], on=["country_code", "year"], how="left")
-            st.plotly_chart(residuals_plot(predictions), width="stretch")
+            st.plotly_chart(residuals_plot(predictions, target_label=metric_label(prediction_target)), width="stretch")
             st.dataframe(display_columns(predictions.head(15)), width="stretch", hide_index=True)
     except ValueError as exc:
         st.info(str(exc))
 
 with tab_panel:
+    st.caption(
+        "Model efektów stałych kontroluje stałe, niewidoczne różnice między krajami oraz wspólne efekty lat. "
+        "To nadal model opisowy, a nie dowód przyczynowości."
+    )
     try:
-        panel = fit_panel_fixed_effects(df_filtered, features=DEFAULT_FEATURES)
+        panel = fit_panel_fixed_effects(df_filtered, features=DEFAULT_FEATURES, target=prediction_target)
         st.metric("Skorygowane R²", f"{panel['adj_r2']:.3f}", help=panel["formula"])
         coef = panel["coefficients"].copy()
         coef["term"] = coef["term"].map(metric_label)
@@ -955,6 +1222,10 @@ with tab_panel:
         st.info(str(exc))
 
 with tab_forecast:
+    st.caption(
+        "Prognoza ARIMA jest krótkoterminową demonstracją na rocznych danych. "
+        "Szeregi mają niewiele punktów, dlatego wynik należy porównywać z prostymi baseline'ami."
+    )
     forecast_country = st.selectbox("Kraj", options=country_options, index=country_options.index("Poland") if "Poland" in country_options else 0)
     periods = st.slider("Horyzont prognozy", 1, 5, 3)
     try:
@@ -963,7 +1234,21 @@ with tab_forecast:
             forecast_plot(forecast_result["history"], forecast_result["forecast"], forecast_country),
             width="stretch",
         )
+        forecast_metrics = st.columns(4)
+        with forecast_metrics[0]:
+            st.metric("Liczba obserwacji", forecast_result["n_obs"])
+        with forecast_metrics[1]:
+            st.metric("ADF p-value", fmt_p(forecast_result["adf_p"]))
+        with forecast_metrics[2]:
+            st.metric("AIC", f"{forecast_result['aic']:.1f}")
+        with forecast_metrics[3]:
+            st.metric("BIC", f"{forecast_result['bic']:.1f}")
         st.dataframe(display_columns(forecast_result["forecast"]), width="stretch", hide_index=True)
+        st.caption(
+            "Baseline 'ostatnia wartość' powtarza ostatnią znaną inflację żywności, a baseline 'średnia z 3 lat' "
+            "powtarza średnią z trzech ostatnich obserwacji. SARIMA i dekompozycja sezonowa nie są tu stosowane, "
+            "bo dane są roczne i krótkie."
+        )
     except ValueError as exc:
         st.info(str(exc))
 
@@ -973,28 +1258,52 @@ section_anchor(
     "Automatycznie generowane obserwacje dla aktualnych filtrów oraz ograniczenia interpretacji.",
     help_text=SECTION_HELP_PL["conclusions"],
 )
-top_year = latest.dropna(subset=["food_affordability_gap_pct"]).sort_values("food_affordability_gap_pct", ascending=False).head(5)
-top_year_str = ", ".join(top_year["country_name"].tolist()) if not top_year.empty else "brak krajów"
-avg_food_vs_headline_gap = latest["food_inflation_pct"].mean() - latest["headline_inflation_pct"].mean()
-avg_affordability_gap = latest["food_affordability_gap_pct"].mean()
-income_corr = df_filtered[["median_income_eur", "food_inflation_pct"]].corr().iloc[0, 1]
-share_corr = df_filtered[["food_share_budget_pct", "food_affordability_gap_pct"]].corr().iloc[0, 1]
-cumulative_leader = (
-    cumulative_2020_2024.iloc[0]["country_name"]
-    if not cumulative_2020_2024.empty
-    else "brak danych"
-)
+current_year = max_year
+current_latest = scope_df[scope_df["year"] == current_year].copy()
+current_notes = interpret_current_situation(current_latest, current_year)
+selected_notes = interpret_current_situation(latest, reference_year)
+cumulative_notes = interpret_cumulative_pressure(cumulative_2020_2024)
 
-st.markdown(
-    f"""
-- W roku **{reference_year}** najwyższa luka dostępności żywności występuje w krajach: **{top_year_str}**.
-- Średnia luka dostępności w wybranych krajach wynosi **{avg_affordability_gap:.2f} p.p.**.
-- W wybranych krajach średnia inflacja żywności jest o **{avg_food_vs_headline_gap:.2f} p.p.** wyższa od inflacji ogólnej.
-- Korelacja między medianą dochodu a inflacją żywności wynosi **{income_corr:.2f}**.
-- Korelacja między udziałem wydatków na żywność a luką dostępności wynosi **{share_corr:.2f}**.
-- W analizie skumulowanej 2020-2024 najwyżej w rankingu presji znajduje się: **{cumulative_leader}**.
-"""
+current_complete = current_latest.dropna(subset=["food_affordability_gap_pct"])
+current_positive_count = int((current_complete["food_affordability_gap_pct"] > 0).sum()) if not current_complete.empty else 0
+current_n = len(current_complete)
+cumulative_median = (
+    cumulative_2020_2024["cumulative_affordability_gap_pct"].median()
+    if not cumulative_2020_2024.empty
+    else np.nan
 )
+if current_n and current_positive_count <= max(3, int(current_n * 0.25)) and pd.notna(cumulative_median) and cumulative_median > 0:
+    synthesis = (
+        "Najważniejszy obraz analityczny jest dwuwarstwowy: bieżąca inflacja żywności w większości krajów przestała "
+        "pogarszać lukę względem dochodów, ale część krajów nadal niesie skumulowany koszt szoku z lat 2020-2024."
+    )
+elif current_n and current_positive_count <= max(3, int(current_n * 0.25)):
+    synthesis = (
+        "W ostatnim roku danych problem przesuwa się z samego tempa inflacji żywności na odporność gospodarstw: "
+        "kluczowe stają się poziom dochodów, udział żywności w budżecie i deprywacja posiłku."
+    )
+else:
+    synthesis = (
+        "W aktualnym przekroju presja pozostaje szeroka, dlatego główna interpretacja powinna łączyć bieżącą lukę "
+        "cen-dochód z wrażliwością budżetową gospodarstw."
+    )
+
+st.markdown("**Aktualna sytuacja w danych**")
+st.caption(
+    f"Ostatni rok w przetworzonym zbiorze to {current_year}. To najnowszy punkt dostępny w dashboardzie, "
+    "nie bieżący odczyt miesięczny ani prognoza dla obecnego roku."
+)
+st.markdown("\n".join(f"- {note}" for note in current_notes))
+
+if reference_year != current_year:
+    st.markdown(f"**Wybrany rok referencyjny: {reference_year}**")
+    st.markdown("\n".join(f"- {note}" for note in selected_notes))
+
+st.markdown("**Perspektywa po szoku 2020-2024**")
+st.markdown("\n".join(f"- {note}" for note in cumulative_notes))
+
+st.markdown("**Wniosek syntetyczny**")
+st.info(synthesis)
 
 with st.expander("Ograniczenia interpretacji", expanded=False):
     st.markdown(
@@ -1004,6 +1313,8 @@ with st.expander("Ograniczenia interpretacji", expanded=False):
 - Część braków danych jest uzupełniana interpolacją, dlatego pojedyncze wartości należy traktować jako przybliżenia.
 - FPI jest wrażliwy na bardzo niski lub ujemny wzrost dochodu; z tego powodu główną metryką interpretacyjną jest luka dostępności.
 - Porównanie 2020-2024 zależy od dostępności danych dla obu lat i nie opisuje pełnej ścieżki zmian między nimi.
+- Modele predykcyjne i prognoza ARIMA mają charakter eksploracyjny; nie dowodzą przyczynowości i są ograniczone przez krótkie szeregi roczne.
+- Dane PPP o poziomie cen żywności mają słabsze pokrycie historyczne niż dane HICP, dochodowe i wydatkowe.
 """
     )
 

@@ -46,12 +46,16 @@ def forecast_inflation(
 
     last_year = int(series.index.max())
     future_years = list(range(last_year + 1, last_year + horizon + 1))
+    last_value = float(series.iloc[-1])
+    recent_mean = float(series.tail(min(3, len(series))).mean())
     forecast_df = pd.DataFrame(
         {
             "year": future_years,
             "forecast": mean,
             "lower": ci[:, 0],
             "upper": ci[:, 1],
+            "baseline_last": [last_value] * horizon,
+            "baseline_recent_mean": [recent_mean] * horizon,
         }
     )
     history_df = series.reset_index()
@@ -64,6 +68,8 @@ def forecast_inflation(
         "bic": float(model.bic),
         "n_obs": len(series),
         "adf_p": adf_p,
+        "baseline_last": last_value,
+        "baseline_recent_mean": recent_mean,
     }
 
 

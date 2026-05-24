@@ -71,28 +71,28 @@ Country codes are normalised to ISO-2. `regions.csv` stores `country_code`, `iso
 
 ## Metrics
 
-| Metric | Type | Description |
-| --- | --- | --- |
-| `fpi` | synthetic ratio | `food_inflation_pct / income_growth_pct`; values above 1 mean food prices grew faster than income; negative values can occur when income growth is negative |
-| `food_inflation_pct` | % YoY | annual HICP CP01 food inflation |
-| `headline_inflation_pct` | % YoY | annual HICP CP00 all-items inflation |
-| `median_income_eur` | EUR/year | median equivalised net income |
-| `income_growth_pct` | % YoY | country-level median income growth |
-| `food_share_budget_pct` | % | food share in household final consumption |
-| `food_price_level_index` | EU27_2020=100 | relative food price level |
-| `meal_deprivation_pct` | % of population | inability to afford a proper meal every second day |
-| `food_affordability_gap_pct` | percentage points | `food_inflation_pct - income_growth_pct` |
-| `food_inflation_index_2020` | index | cumulative food price index with 2020=100 |
+| Metric | Type | Description | Interpretation |
+| --- | --- | --- | --- |
+| `food_affordability_gap_pct` | percentage points | `food_inflation_pct - income_growth_pct` | Higher values indicate weaker food affordability; positive values mean food prices grew faster than income. |
+| `fpi` | synthetic ratio | `food_inflation_pct / income_growth_pct`; values above 1 mean food prices grew faster than income; negative values can occur when income growth is negative | Higher values indicate stronger price pressure, but the ratio is unstable when income growth is close to zero. |
+| `food_inflation_pct` | % YoY | annual HICP CP01 food inflation | Higher values indicate faster food price growth and greater consumer pressure. |
+| `headline_inflation_pct` | % YoY | annual HICP CP00 all-items inflation | Higher values indicate faster growth of the general price level. |
+| `median_income_eur` | EUR/year | median equivalised net income | Higher values indicate a larger nominal income buffer. |
+| `income_growth_pct` | % YoY | country-level median income growth | Higher values indicate stronger income growth and greater capacity to absorb price increases. |
+| `food_share_budget_pct` | % | food share in household final consumption | Higher values indicate greater household budget sensitivity to food prices. |
+| `food_price_level_index` | EU27_2020=100 | relative food price level | Higher values indicate a higher food price level relative to the EU average. |
+| `meal_deprivation_pct` | % of population | inability to afford a proper meal every second day | Higher values indicate more severe social deprivation. |
+| `food_inflation_index_2020` | index | cumulative food price index with 2020=100 | Higher values indicate a higher accumulated food price level relative to 2020. |
 
 When `income_growth_pct` is close to zero, ETL sets FPI to missing to avoid unstable division.
 
 The dashboard also computes view-level helper metrics for the 2020-2024 comparison:
 
-| Metric | Type | Description |
-| --- | --- | --- |
-| `food_price_growth_2020_2024_pct` | % change | cumulative food price growth between 2020 and 2024 |
-| `income_growth_2020_2024_pct` | % change | cumulative median income growth between 2020 and 2024 |
-| `cumulative_affordability_gap_pct` | percentage points | cumulative food price growth minus cumulative income growth |
+| Metric | Type | Description | Interpretation |
+| --- | --- | --- | --- |
+| `food_price_growth_2020_2024_pct` | % change | cumulative food price growth between 2020 and 2024 | Higher values indicate stronger accumulated food price growth. |
+| `income_growth_2020_2024_pct` | % change | cumulative median income growth between 2020 and 2024 | Higher values indicate stronger accumulated income growth. |
+| `cumulative_affordability_gap_pct` | percentage points | cumulative food price growth minus cumulative income growth | Higher values indicate weaker food affordability; positive values mean food prices outpaced income. |
 
 ## Dashboard Structure
 
@@ -108,7 +108,7 @@ The dashboard also computes view-level helper metrics for the 2020-2024 comparis
 | 8 | Distributions and Anomalies | box plot, histogram, Z-score outlier table | metric |
 | 9 | Correlations and PCA | Pearson/Spearman heatmap, Holm-adjusted p-values, country-year heatmap, PCA biplot, scree plot | method |
 | 10 | Statistical Tests | ANOVA, Mann-Whitney, bootstrap CI, Chi-square | metric |
-| 11 | Prediction and Forecast | predictive regression, panel fixed effects, ARIMA forecast | features, country |
+| 11 | Prediction and Forecast | affordability-gap regression, panel fixed effects, ARIMA forecast | features, country |
 | 12 | Analytical Conclusions and Limitations | filter-aware notes and interpretation caveats | global filters |
 | 13 | Data Export | CSV download for current view and full dataset | global filters |
 
@@ -148,9 +148,11 @@ europe-food-affordability/
 
 The project uses bootstrap confidence intervals for regional means in the selected reference year. Each country appears once in that section, so the resampling unit is the country observation.
 
-ANOVA is reported with Kruskal-Wallis and Levene checks because regional distributions can be skewed and heteroskedastic.
+ANOVA is reported with Kruskal-Wallis, Levene checks, and Shapiro-Wilk diagnostics because regional distributions can be skewed, non-normal, and heteroskedastic.
 
-Pairwise regional tests use Mann-Whitney U with Holm-Bonferroni correction. Correlation tables also report Holm-adjusted p-values.
+Pairwise regional tests use Mann-Whitney U with Holm-Bonferroni correction. Correlation matrices use pairwise complete observations and correlation p-values are Holm-adjusted.
+
+The Chi-square section reports Cramer's V and the minimum expected cell count. Results with expected counts below 5 are treated as descriptive diagnostics rather than strong confirmatory evidence.
 
 Outlier tables rank country-year observations by the absolute Z-score of the selected metric. This highlights values farthest from the current filtered mean.
 
@@ -158,9 +160,11 @@ Country typology is rule-based and uses current-filter medians of the affordabil
 
 PCA is fitted on standardised variables, so features measured in EUR, percentages, and indices are comparable. The biplot shows country-year similarity in the first two components, while the scree plot shows how much variance each component explains.
 
-The predictive regression excludes `income_growth_pct` by default because it is part of the FPI target definition. Including it is available in the UI only to demonstrate target leakage.
+The predictive regression and panel fixed-effects model use `food_affordability_gap_pct` as the default target because it is the main interpretation metric and is more stable than the FPI ratio. `income_growth_pct` is excluded from the default predictors because it is part of the affordability-gap formula and would create target leakage.
 
 `food_price_level_index` and `minimum_wage_eur_month` are optional regression features because their historical coverage is weaker.
+
+The ARIMA forecast is a short-run exploratory forecast for annual food inflation. The dashboard reports ADF p-value, AIC, BIC, observation count, and simple baselines. Seasonal models such as SARIMA are not used because the project uses annual series with about 15 observations per country.
 
 Eurostat is migrating PPP data to COICOP 2018 in `prc_ppp_ind_1`; the ETL first tries the newer source and falls back to `prc_ppp_ind` for historical food price-level data.
 
@@ -172,3 +176,25 @@ Main interpretation limits:
 - some missing values are interpolated in ETL;
 - FPI is sensitive when income growth is close to zero or negative, so the affordability gap is the safer headline metric;
 - 2020-2024 cumulative comparisons require data in both endpoint years and do not replace full time-series interpretation.
+
+## Methodological Fit and Exclusions
+
+The current analytical table contains 480 country-year observations, covering 33 countries from 2010 to 2024. This is below the literal 1000-observation EDA threshold mentioned in the course notes, but it is a coherent macroeconomic panel: each row is a country-year observation built from official Eurostat series. The project therefore prioritises consistency, country coverage, and interpretable joins over artificially expanding the dataset.
+
+PCA is retained because the dashboard uses several numeric indicators measured on different scales and the method is appropriate after standardisation. In the current cached dataset, PCA has 197 complete rows because `food_price_level_index` has weaker historical coverage.
+
+The following methods are intentionally not used:
+
+- t-SNE and UMAP: they could suggest unstable visual clusters with this sample size and small number of core numeric features.
+- LDA: it requires supervised class labels and a classification objective, while this project is exploratory and comparative.
+- Autoencoders: they are not appropriate for a small tabular macroeconomic dataset.
+- SARIMA and seasonal decomposition: the data are annual, so there is no within-year seasonality to model.
+- ACF/PACF as a dashboard section: with about 15 annual points per country, these diagnostics would be unstable and could be overinterpreted.
+
+Main methodological caveats:
+
+- interpolation smooths short missing-data gaps and can dampen abrupt changes;
+- PPP food price-level data have weaker coverage than HICP, income, and expenditure-share data;
+- country-level aggregates do not capture inequality within countries;
+- regional statistical tests have small group sizes, so non-parametric results and effect sizes should be read alongside p-values;
+- the dashboard is exploratory and comparative, not causal.
