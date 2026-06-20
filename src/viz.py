@@ -8,24 +8,21 @@ import plotly.express as px
 import plotly.graph_objects as go
 
 
-REGION_ORDER = ["Northern Europe", "Western Europe", "Southern Europe", "Central Europe", "Eastern Europe"]
+REGION_ORDER = ["Northern", "Western", "Southern", "Eastern"]
 REGION_COLORS = {
-    "Northern Europe": "#3b82f6",
-    "Western Europe": "#10b981",
-    "Southern Europe": "#f97316",
-    "Central Europe": "#8b5cf6",
-    "Eastern Europe": "#ef4444",
+    "Northern": "#3b82f6",
+    "Western": "#10b981",
+    "Southern": "#f97316",
+    "Eastern": "#ef4444",
 }
 REGION_LABELS_PL = {
-    "Northern Europe": "Europa Północna",
-    "Western Europe": "Europa Zachodnia",
-    "Southern Europe": "Europa Południowa",
-    "Central Europe": "Europa Centralna",
-    "Eastern Europe": "Europa Wschodnia",
+    "Northern": "Europa Północna",
+    "Western": "Europa Zachodnia",
+    "Southern": "Europa Południowa",
+    "Eastern": "Europa Wschodnia",
 }
 REGION_COLORS_PL = {REGION_LABELS_PL[key]: value for key, value in REGION_COLORS.items()}
 FEATURE_LABELS_PL = {
-    "fpi": "Indeks Presji Cen Żywności",
     "food_affordability_gap_pct": "Luka dostępności żywności",
     "food_inflation_pct": "Inflacja żywności",
     "headline_inflation_pct": "Inflacja ogólna",
@@ -35,15 +32,6 @@ FEATURE_LABELS_PL = {
     "food_price_level_index": "Poziom cen żywności",
     "meal_deprivation_pct": "Brak pełnowartościowego posiłku",
 }
-
-SEGMENT_COLORS = {
-    "Największe ryzyko dostępności": "#dc2626",
-    "Presja cenowa": "#f97316",
-    "Wrażliwy budżet": "#eab308",
-    "Relatywnie stabilna sytuacja": "#16a34a",
-    "Brak klasyfikacji": "#64748b",
-}
-
 
 def _apply_layout(fig: go.Figure, title: str | None = None, legend_title: str = "Region") -> go.Figure:
     fig.update_layout(
@@ -186,7 +174,6 @@ def scatter_income(df: pd.DataFrame, year: int) -> go.Figure:
             "median_income_eur": ":,.0f",
             "food_inflation_pct": ":.2f",
             "headline_inflation_pct": ":.2f",
-            "fpi": ":.2f",
             "food_spending_share": ":.1f",
         },
         color_discrete_map=REGION_COLORS_PL,
@@ -281,50 +268,6 @@ def cumulative_gap_bar(summary: pd.DataFrame, top_n: int = 15) -> go.Figure:
     return _apply_layout(fig, "Największa skumulowana presja 2020-2024")
 
 
-def typology_scatter(df: pd.DataFrame, year: int) -> go.Figure:
-    title = f"Typologia krajów według presji i dochodu · {year}"
-    d = df.dropna(
-        subset=[
-            "median_income_eur",
-            "food_affordability_gap_pct",
-            "food_share_budget_pct",
-            "pressure_segment",
-        ]
-    ).copy()
-    d = d[np.isfinite(d["median_income_eur"]) & np.isfinite(d["food_affordability_gap_pct"])]
-    if d.empty:
-        return _empty_figure(title)
-    d["food_share_budget_pct"] = d["food_share_budget_pct"].clip(lower=0.1)
-    fig = px.scatter(
-        d,
-        x="median_income_eur",
-        y="food_affordability_gap_pct",
-        size="food_share_budget_pct",
-        color="pressure_segment",
-        hover_name="country_name",
-        hover_data={
-            "food_inflation_pct": ":.2f",
-            "income_growth_pct": ":.2f",
-            "food_share_budget_pct": ":.1f",
-            "meal_deprivation_pct": ":.1f",
-            "pressure_segment": False,
-        },
-        color_discrete_map=SEGMENT_COLORS,
-        labels={
-            "median_income_eur": "Mediana dochodu (EUR/rok)",
-            "food_affordability_gap_pct": "Luka dostępności żywności (p.p.)",
-            "food_share_budget_pct": "Udział żywności w wydatkach (%)",
-            "pressure_segment": "Typ kraju",
-            "food_inflation_pct": "Inflacja żywności (%)",
-            "income_growth_pct": "Wzrost dochodu (%)",
-            "meal_deprivation_pct": "Brak pełnowartościowego posiłku (%)",
-        },
-    )
-    fig.add_hline(y=0, line_dash="dash", line_color="#64748b")
-    fig.update_traces(marker=dict(opacity=0.82, line=dict(width=0.7, color="white")))
-    return _apply_layout(fig, title, legend_title="Typ kraju")
-
-
 def boxplot_region(df: pd.DataFrame, value: str, year: int, title: str) -> go.Figure:
     fig_title = f"{title} według regionu · {year}"
     d = df[df["year"] == year].dropna(subset=[value]).copy()
@@ -358,7 +301,7 @@ def histogram(df: pd.DataFrame, value: str, year: int, title: str) -> go.Figure:
         d,
         x=value,
         color="region_label",
-        nbins=20,
+        nbins=freedman_diaconis_bins(d[value]),
         marginal="box",
         color_discrete_map=REGION_COLORS_PL,
         category_orders={"region_label": [REGION_LABELS_PL[r] for r in REGION_ORDER]},
@@ -366,6 +309,47 @@ def histogram(df: pd.DataFrame, value: str, year: int, title: str) -> go.Figure:
     )
     fig.update_yaxes(title="Liczba obserwacji")
     return _apply_layout(fig, fig_title)
+
+
+def freedman_diaconis_bins(values: pd.Series | np.ndarray) -> int:
+    """Choose histogram bins with Freedman-Diaconis and Sturges fallback."""
+    arr = np.asarray(values, dtype=float)
+    arr = arr[np.isfinite(arr)]
+    n = len(arr)
+    if n < 2:
+        return 1
+    q1, q3 = np.percentile(arr, [25, 75])
+    width = 2 * (q3 - q1) / np.cbrt(n)
+    span = float(arr.max() - arr.min())
+    if width > 0 and span > 0:
+        return max(1, int(np.ceil(span / width)))
+    return max(1, int(np.ceil(np.log2(n) + 1)))
+
+
+def category_ranking_bar(df: pd.DataFrame, year: int, category_name: str) -> go.Figure:
+    title = f"Inflacja kategorii: {category_name} · {year}"
+    d = df[(df["year"] == year) & (df["food_category_name"] == category_name)].copy()
+    d = d.dropna(subset=["category_food_inflation_pct"]).sort_values(
+        "category_food_inflation_pct", ascending=True
+    )
+    if d.empty:
+        return _empty_figure(title)
+    d["region_label"] = d["region"].map(REGION_LABELS_PL).fillna(d["region"])
+    fig = px.bar(
+        d,
+        x="category_food_inflation_pct",
+        y="country_name",
+        color="region_label",
+        orientation="h",
+        color_discrete_map=REGION_COLORS_PL,
+        labels={
+            "category_food_inflation_pct": "Inflacja kategorii (%)",
+            "country_name": "Kraj",
+            "region_label": "Region",
+        },
+    )
+    fig.update_layout(height=max(500, len(d) * 24 + 100))
+    return _apply_layout(fig, title)
 
 
 def heatmap_corr(corr: pd.DataFrame, title: str = "Korelacje metryk") -> go.Figure:
@@ -426,30 +410,6 @@ def heatmap_country_year(df: pd.DataFrame, value: str, title: str) -> go.Figure:
         automargin=True,
     )
     return _apply_layout(fig, title)
-
-
-def residuals_plot(
-    predictions: pd.DataFrame,
-    target_label: str = "Wartość docelowa",
-) -> go.Figure:
-    predictions = predictions.copy()
-    if "region" in predictions.columns:
-        predictions["region_label"] = predictions["region"].map(REGION_LABELS_PL).fillna(predictions["region"])
-    fig = px.scatter(
-        predictions,
-        x="predicted",
-        y="residual",
-        color="region_label" if "region_label" in predictions.columns else None,
-        hover_name="country_name",
-        color_discrete_map=REGION_COLORS_PL,
-        labels={
-            "predicted": f"Prognozowana wartość: {target_label}",
-            "residual": "Reszta (wartość rzeczywista - prognoza)",
-            "region_label": "Region",
-        },
-    )
-    fig.add_hline(y=0, line_dash="dash", line_color="#334155")
-    return _apply_layout(fig, "Reszty modelu")
 
 
 def pca_biplot(scores: pd.DataFrame, loadings: pd.DataFrame, explained: list[float]) -> go.Figure:
@@ -547,58 +507,3 @@ def pca_scree_plot(explained: list[float]) -> go.Figure:
     fig.update_yaxes(title="Wyjaśniona wariancja (%)", range=[0, 105])
     fig.update_xaxes(title="Komponent PCA")
     return _apply_layout(fig, "Scree plot PCA", legend_title="Miara")
-
-
-def forecast_plot(history: pd.DataFrame, forecast: pd.DataFrame, country_label: str) -> go.Figure:
-    fig = go.Figure()
-    fig.add_scatter(
-        x=history["year"],
-        y=history["food_inflation_pct"],
-        mode="lines+markers",
-        name="Dane historyczne",
-        line=dict(color="#2563eb", width=3),
-    )
-    fig.add_scatter(
-        x=forecast["year"],
-        y=forecast["forecast"],
-        mode="lines+markers",
-        name="Prognoza",
-        line=dict(color="#ef4444", width=3, dash="dash"),
-    )
-    if "baseline_last" in forecast.columns:
-        fig.add_scatter(
-            x=forecast["year"],
-            y=forecast["baseline_last"],
-            mode="lines+markers",
-            name="Baseline: ostatnia wartość",
-            line=dict(color="#475569", width=2, dash="dot"),
-        )
-    if "baseline_recent_mean" in forecast.columns:
-        fig.add_scatter(
-            x=forecast["year"],
-            y=forecast["baseline_recent_mean"],
-            mode="lines+markers",
-            name="Baseline: średnia z 3 lat",
-            line=dict(color="#0f766e", width=2, dash="dot"),
-        )
-    fig.add_scatter(
-        x=forecast["year"],
-        y=forecast["lower"],
-        mode="lines",
-        name="Dolna granica",
-        line=dict(color="rgba(239,68,68,0.25)"),
-        showlegend=False,
-    )
-    fig.add_scatter(
-        x=forecast["year"],
-        y=forecast["upper"],
-        mode="lines",
-        name="Górna granica",
-        fill="tonexty",
-        fillcolor="rgba(239,68,68,0.12)",
-        line=dict(color="rgba(239,68,68,0.25)"),
-        showlegend=False,
-    )
-    fig.update_yaxes(title="Inflacja żywności (%)")
-    fig.update_xaxes(title="Rok")
-    return _apply_layout(fig, f"Prognoza ARIMA - {country_label}")
