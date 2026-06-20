@@ -1,25 +1,14 @@
 """Statistical tests used by the Streamlit dashboard."""
 from __future__ import annotations
 
-from dataclasses import dataclass
 from itertools import combinations
+import warnings
 
 import numpy as np
 import pandas as pd
 from scipy import stats
 from statsmodels.stats.multitest import multipletests
-
-
-@dataclass
-class RegionTestResult:
-    anova_stat: float
-    anova_p: float
-    kruskal_stat: float
-    kruskal_p: float
-    levene_stat: float
-    levene_p: float
-    eta_squared: float
-    pairwise: pd.DataFrame
+from statsmodels.stats.multicomp import pairwise_tukeyhsd
 
 
 def _finite_series(s: pd.Series) -> pd.Series:
@@ -27,14 +16,39 @@ def _finite_series(s: pd.Series) -> pd.Series:
     return values[np.isfinite(values)].dropna()
 
 
-def _eta_squared(groups: list[np.ndarray]) -> float:
+def _omega_squared(groups: list[np.ndarray]) -> float:
     all_vals = np.concatenate(groups)
-    grand_mean = all_vals.mean()
-    ss_total = float(np.sum((all_vals - grand_mean) ** 2))
-    if ss_total == 0:
+    k = len(groups)
+    n = len(all_vals)
+    if k < 2 or n <= k:
         return float("nan")
+    grand_mean = all_vals.mean()
     ss_between = float(sum(len(g) * (g.mean() - grand_mean) ** 2 for g in groups))
-    return ss_between / ss_total
+    ss_within = float(sum(np.sum((g - g.mean()) ** 2) for g in groups))
+    ss_total = ss_between + ss_within
+    ms_within = ss_within / (n - k)
+    denominator = ss_total + ms_within
+    if denominator == 0:
+        return float("nan")
+    return float(max(0.0, (ss_between - (k - 1) * ms_within) / denominator))
+
+
+def _epsilon_squared(h_stat: float, n: int, k: int) -> float:
+    if n <= k:
+        return float("nan")
+    return float(max(0.0, (h_stat - k + 1) / (n - k)))
+
+
+def _effect_label(value: float) -> str:
+    if not np.isfinite(value):
+        return "n/a"
+    if value < 0.01:
+        return "negligible"
+    if value < 0.06:
+        return "small"
+    if value < 0.14:
+        return "medium"
+    return "large"
 
 
 def _cliffs_delta_from_u(u_stat: float, n_a: int, n_b: int) -> float:
@@ -54,37 +68,6 @@ def _cliffs_delta_label(delta: float) -> str:
     if ad < 0.474:
         return "medium"
     return "large"
-
-
-def anova_regions(df: pd.DataFrame, metric: str, region_col: str = "region") -> dict:
-    """One-way ANOVA, Kruskal-Wallis and Levene tests by region."""
-    groups = [_finite_series(g[metric]).values for _, g in df.groupby(region_col)]
-    groups = [g for g in groups if len(g) >= 2]
-    if len(groups) < 2:
-        return {
-            "f": np.nan,
-            "p": np.nan,
-            "h": np.nan,
-            "p_kruskal": np.nan,
-            "levene_w": np.nan,
-            "levene_p": np.nan,
-            "eta_squared": np.nan,
-            "n_groups": len(groups),
-        }
-
-    f, p = stats.f_oneway(*groups)
-    h, p_kruskal = stats.kruskal(*groups)
-    levene_w, levene_p = stats.levene(*groups, center="median")
-    return {
-        "f": float(f),
-        "p": float(p),
-        "h": float(h),
-        "p_kruskal": float(p_kruskal),
-        "levene_w": float(levene_w),
-        "levene_p": float(levene_p),
-        "eta_squared": _eta_squared(groups),
-        "n_groups": len(groups),
-    }
 
 
 def pairwise_mann_whitney(
@@ -184,66 +167,7 @@ def correlation_significance(
     return out.sort_values("r", key=lambda s: s.abs(), ascending=False)
 
 
-def chi_square_region_pressure(
-    df: pd.DataFrame,
-    metric: str = "fpi",
-    region_col: str = "region",
-    n_bins: int = 3,
-) -> dict:
-    """Test independence of region and a quantile-binned pressure metric."""
-    bin_labels = ["low", "medium", "high"][:n_bins]
-    sub = df[[region_col, metric]].dropna().copy()
-    sub = sub[np.isfinite(sub[metric])]
-    if len(sub) < n_bins * 2:
-        return {"error": f"Too few observations ({len(sub)}) for Chi-square."}
 
-    sub["pressure_class"] = pd.qcut(
-        sub[metric],
-        q=n_bins,
-        labels=bin_labels,
-        duplicates="drop",
-    )
-    contingency = pd.crosstab(sub[region_col], sub["pressure_class"])
-    if contingency.shape[0] < 2 or contingency.shape[1] < 2:
-        return {"error": "Contingency table is too small."}
-
-    chi2, p, dof, expected = stats.chi2_contingency(contingency)
-    n = contingency.values.sum()
-    min_dim = min(contingency.shape) - 1
-    cramers_v = float(np.sqrt(chi2 / (n * min_dim))) if min_dim > 0 else float("nan")
-
-    return {
-        "chi2": float(chi2),
-        "p": float(p),
-        "dof": int(dof),
-        "n": int(n),
-        "cramers_v": cramers_v,
-        "min_expected": float(expected.min()),
-        "contingency": contingency,
-        "expected": pd.DataFrame(
-            expected,
-            index=contingency.index,
-            columns=contingency.columns,
-        ),
-    }
-
-
-def region_anova(df: pd.DataFrame, metric: str, region_col: str = "region") -> RegionTestResult:
-    """Return regional ANOVA/Kruskal/Levene results in the shape expected by the dashboard."""
-    result = anova_regions(df, metric, region_col=region_col)
-    if result["n_groups"] < 2:
-        raise ValueError("At least two regions with two or more observations are required.")
-
-    return RegionTestResult(
-        anova_stat=result["f"],
-        anova_p=result["p"],
-        kruskal_stat=result["h"],
-        kruskal_p=result["p_kruskal"],
-        levene_stat=result["levene_w"],
-        levene_p=result["levene_p"],
-        eta_squared=result["eta_squared"],
-        pairwise=pairwise_mann_whitney(df, metric, region_col=region_col),
-    )
 
 
 def shapiro_by_region(df: pd.DataFrame, metric: str, region_col: str = "region") -> pd.DataFrame:
@@ -310,6 +234,18 @@ def pvalue_matrix(
     return out
 
 
+def sample_size_matrix(df: pd.DataFrame, cols: list[str]) -> pd.DataFrame:
+    """Pairwise-complete sample sizes corresponding to a correlation matrix."""
+    out = pd.DataFrame(0, index=cols, columns=cols, dtype=int)
+    for a in cols:
+        out.loc[a, a] = int(_finite_series(df[a]).shape[0])
+    for a, b in combinations(cols, 2):
+        n = int(df[[a, b]].replace([np.inf, -np.inf], np.nan).dropna().shape[0])
+        out.loc[a, b] = n
+        out.loc[b, a] = n
+    return out
+
+
 def bootstrap_region_means(
     df: pd.DataFrame,
     metric: str,
@@ -340,33 +276,130 @@ def bootstrap_region_means(
     return pd.DataFrame(rows).sort_values("mean", ascending=False).reset_index(drop=True)
 
 
-def top_outliers(df: pd.DataFrame, metric: str, n: int = 10) -> pd.DataFrame:
-    """Return observations with the largest absolute z-scores for the selected metric."""
+def iqr_outliers(df: pd.DataFrame, metric: str, n: int = 10) -> pd.DataFrame:
+    """Return observations outside Tukey's 1.5×IQR fences."""
     sub = df.dropna(subset=[metric]).copy()
     sub = sub[np.isfinite(sub[metric])]
     if sub.empty:
-        sub["zscore"] = pd.Series(dtype=float)
-        return sub
+        return sub.assign(iqr_distance=pd.Series(dtype=float))
+    q1, q3 = sub[metric].quantile([0.25, 0.75])
+    spread = q3 - q1
+    if not np.isfinite(spread) or spread == 0:
+        return sub.iloc[0:0].assign(iqr_distance=pd.Series(dtype=float))
+    lower, upper = q1 - 1.5 * spread, q3 + 1.5 * spread
+    flagged = sub[(sub[metric] < lower) | (sub[metric] > upper)].copy()
+    flagged["iqr_distance"] = np.where(
+        flagged[metric] < lower,
+        (lower - flagged[metric]) / spread,
+        (flagged[metric] - upper) / spread,
+    )
+    flagged["iqr_lower"] = float(lower)
+    flagged["iqr_upper"] = float(upper)
+    return flagged.nlargest(n, "iqr_distance")
 
-    std = sub[metric].std(ddof=0)
-    if std == 0 or np.isnan(std):
-        sub["zscore"] = 0.0
+
+def _tukey_posthoc(df: pd.DataFrame, metric: str, region_col: str) -> pd.DataFrame:
+    sub = df[[region_col, metric]].replace([np.inf, -np.inf], np.nan).dropna()
+    result = pairwise_tukeyhsd(sub[metric].astype(float), sub[region_col].astype(str))
+    pairs = list(combinations(result.groupsunique, 2))
+    return pd.DataFrame(
+        {
+            "group1": [pair[0] for pair in pairs],
+            "group2": [pair[1] for pair in pairs],
+            "meandiff": result.meandiffs,
+            "p-adj": result.pvalues,
+            "lower": result.confint[:, 0],
+            "upper": result.confint[:, 1],
+            "reject": result.reject,
+        }
+    )
+
+
+def select_region_test(
+    df: pd.DataFrame,
+    metric: str,
+    region_col: str = "region",
+    alpha: float = 0.05,
+) -> dict[str, object]:
+    """Select one omnibus regional test, effect size and conditional post-hoc."""
+    grouped = {
+        region: _finite_series(group[metric]).values
+        for region, group in df.groupby(region_col)
+    }
+    grouped = {region: values for region, values in grouped.items() if len(values) >= 2}
+    if len(grouped) < 2:
+        raise ValueError("At least two regions with two observations are required.")
+
+    diagnostics = shapiro_by_region(df, metric, region_col=region_col)
+    shapiro_values = diagnostics["p_value"].dropna()
+    all_normal = bool(
+        len(shapiro_values) == len(grouped) and (shapiro_values >= alpha).all()
+    )
+    groups = list(grouped.values())
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", RuntimeWarning)
+        levene_stat, levene_p = stats.levene(*groups, center="median")
+    equal_variances = bool(np.isfinite(levene_p) and levene_p >= alpha)
+
+    if all_normal and equal_variances:
+        statistic, p_value = stats.f_oneway(*groups)
+        effect = _omega_squared(groups)
+        method = "anova"
+        effect_name = "omega_squared"
+        method_label = "ANOVA jednoczynnikowa"
+        hypothesis_null = "średnie regionalne są równe"
+        hypothesis_alternative = "co najmniej jedna średnia regionalna jest inna"
+        group_statistic_name = "średnia"
+        group_summary = (
+            df.groupby(region_col)[metric].mean().dropna().sort_values(ascending=False)
+        )
+        interpretation = "ANOVA ocenia różnice między średnimi regionalnymi."
     else:
-        sub["zscore"] = (sub[metric] - sub[metric].mean()) / std
-    return sub.sort_values("zscore", key=lambda s: s.abs(), ascending=False).head(n)
+        statistic, p_value = stats.kruskal(*groups)
+        effect = _epsilon_squared(float(statistic), sum(map(len, groups)), len(groups))
+        method = "kruskal"
+        effect_name = "epsilon_squared"
+        method_label = "Kruskal–Wallis"
+        hypothesis_null = "rozkłady i rangi są jednakowe we wszystkich regionach"
+        hypothesis_alternative = "co najmniej jeden region ma inny rozkład rang"
+        group_statistic_name = "mediana"
+        group_summary = (
+            df.groupby(region_col)[metric].median().dropna().sort_values(ascending=False)
+        )
+        interpretation = (
+            "Kruskal–Wallis ocenia różnice rozkładów rang; nie jest automatycznie "
+            "testem równości median."
+        )
 
+    reject = bool(p_value < alpha)
+    if not reject:
+        posthoc = pd.DataFrame()
+    elif method == "anova":
+        posthoc = _tukey_posthoc(df, metric, region_col)
+    else:
+        posthoc = pairwise_mann_whitney(
+            df, metric, region_col=region_col, correction="holm"
+        )
 
-def chi_square_high_pressure(df: pd.DataFrame, value_col: str = "fpi") -> dict | None:
-    """Adapt the regional pressure chi-square result for the dashboard display."""
-    result = chi_square_region_pressure(df, metric=value_col)
-    if "error" in result:
-        return None
     return {
-        "chi2": result["chi2"],
-        "p_value": result["p"],
-        "dof": result["dof"],
-        "cramers_v": result["cramers_v"],
-        "min_expected": result["min_expected"],
-        "expected": result["expected"],
-        "table": result["contingency"],
+        "method": method,
+        "method_label": method_label,
+        "hypothesis_null": hypothesis_null,
+        "hypothesis_alternative": hypothesis_alternative,
+        "group_statistic_name": group_statistic_name,
+        "group_summary": group_summary,
+        "interpretation": interpretation,
+        "statistic": float(statistic),
+        "p_value": float(p_value),
+        "alpha": float(alpha),
+        "reject_h0": reject,
+        "effect_name": effect_name,
+        "effect_size": float(effect),
+        "effect_label": _effect_label(float(effect)),
+        "levene_stat": float(levene_stat),
+        "levene_p": float(levene_p),
+        "all_normal": all_normal,
+        "equal_variances": equal_variances,
+        "diagnostics": diagnostics,
+        "posthoc": posthoc,
     }

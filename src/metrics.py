@@ -6,15 +6,6 @@ import pandas as pd
 
 # Column name -> metadata used by the dashboard.
 METRICS: dict[str, dict] = {
-    "fpi": {
-        "label": "Food Pressure Index",
-        "unit": "",
-        "fmt": "{:+.2f}",
-        "desc": "Synthetic ratio: food inflation (%) / median income growth (%). "
-                "Values above 1 mean food prices grew faster than income.",
-        "color_scale": "Reds",
-        "diverging": False,
-    },
     "food_inflation_pct": {
         "label": "Food Inflation (HICP CP01)",
         "unit": "%",
@@ -98,7 +89,7 @@ METRICS: dict[str, dict] = {
 }
 
 KEY_METRICS = [
-    "fpi", "food_inflation_pct", "headline_inflation_pct",
+    "food_inflation_pct", "headline_inflation_pct",
     "median_income_eur", "income_growth_pct", "food_share_budget_pct",
     "food_price_level_index", "meal_deprivation_pct", "food_affordability_gap_pct",
 ]
