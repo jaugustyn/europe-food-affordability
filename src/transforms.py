@@ -14,20 +14,23 @@ def apply_missing_policy(
     strict_cols: list[str],
     soft_cols: list[str],
 ) -> tuple[pd.DataFrame, pd.DataFrame]:
-    """Interpolate short gaps and log rows missing strict ETL columns."""
+    """Interpolate short gaps, mark filled cells and log incomplete strict rows."""
     df = df.sort_values(["country_code", "year"]).copy()
     exclusions = []
 
     for col in strict_cols:
         if col not in df.columns:
             continue
+        missing_before = df[col].isna()
         df[col] = df.groupby("country_code")[col].transform(
             lambda s: s.interpolate(method="linear", limit=2, limit_area="inside")
         )
+        df[f"{col}_imputed"] = missing_before & df[col].notna()
 
     for col in soft_cols:
         if col not in df.columns:
             continue
+        missing_before = df[col].isna()
         df[col] = df.groupby("country_code")[col].transform(
             lambda s: (
                 s.interpolate(method="linear", limit=3, limit_area="inside")
@@ -35,6 +38,7 @@ def apply_missing_policy(
                 .bfill(limit=3)
             )
         )
+        df[f"{col}_imputed"] = missing_before & df[col].notna()
 
     present_strict = [c for c in strict_cols if c in df.columns]
     mask_bad = df[present_strict].isna().any(axis=1) if present_strict else False
@@ -66,11 +70,8 @@ def add_income_growth(df: pd.DataFrame) -> pd.DataFrame:
 
 
 def add_food_pressure_metrics(df: pd.DataFrame) -> pd.DataFrame:
-    """Add FPI ratio, affordability gap and 2020-based cumulative price index."""
+    """Add affordability gap and 2020-based cumulative price index."""
     df = df.copy()
-    denom = df["income_growth_pct"].astype(float)
-    denom = denom.where(denom.abs() >= 0.1)
-    df["fpi"] = df["food_inflation_pct"].astype(float) / denom
     df["food_affordability_gap_pct"] = (
         df["food_inflation_pct"].astype(float) - df["income_growth_pct"].astype(float)
     )

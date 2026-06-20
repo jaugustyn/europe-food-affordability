@@ -9,7 +9,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-from .config import EUROSTAT_TO_ISO2, RAW_DIR, YEAR_MAX, YEAR_MIN
+from .config import EUROSTAT_TO_ISO2, FOOD_CATEGORIES, RAW_DIR, YEAR_MAX, YEAR_MIN
 
 log = logging.getLogger("etl")
 
@@ -94,6 +94,20 @@ def _first_working_dataset(specs: Iterable[tuple[str, dict, str]], value_col: st
     raise RuntimeError("; ".join(errors))
 
 
+def combine_ppp_sources(parts: list[pd.DataFrame]) -> pd.DataFrame:
+    """Prefer a valid new PPP value, otherwise fall back to the historical source."""
+    combined = pd.concat(parts, ignore_index=True)
+    combined["has_value"] = combined["food_price_level_index"].notna()
+    combined = combined.sort_values(
+        ["country_code", "year", "has_value", "source_priority"],
+        ascending=[True, True, False, True],
+    ).drop_duplicates(["country_code", "year"], keep="first")
+    combined.loc[
+        combined["food_price_level_index"].isna(), "food_price_level_source"
+    ] = pd.NA
+    return combined.drop(columns=["source_priority", "has_value"])
+
+
 def get_food_inflation() -> pd.DataFrame:
     """HICP CP01: food and non-alcoholic beverages, annual rate of change."""
     raw = fetch_eurostat(
@@ -102,6 +116,43 @@ def get_food_inflation() -> pd.DataFrame:
         "eurostat_food_inflation",
     )
     return reshape_eurostat_long(raw, "food_inflation_pct")
+
+
+def get_food_category_inflation() -> pd.DataFrame:
+    """Full annual HICP country-year-category grid, including missing values."""
+    raw = fetch_eurostat(
+        "prc_hicp_aind",
+        {"coicop": list(FOOD_CATEGORIES), "unit": ["RCH_A_AVG"]},
+        "eurostat_food_categories",
+    )
+    geo_col = _country_column(raw)
+    long = raw.melt(
+        id_vars=[geo_col, "coicop"],
+        value_vars=_time_columns(raw),
+        var_name="year",
+        value_name="category_food_inflation_pct",
+    ).rename(
+        columns={geo_col: "country_code", "coicop": "food_category_code"}
+    )
+    long["year"] = long["year"].astype(str).str.extract(r"(\d{4})").astype(int)
+    long["country_code"] = long["country_code"].replace(EUROSTAT_TO_ISO2)
+    long["category_food_inflation_pct"] = pd.to_numeric(
+        long["category_food_inflation_pct"], errors="coerce"
+    )
+    long = long[
+        long["year"].between(YEAR_MIN, YEAR_MAX)
+        & long["food_category_code"].isin(FOOD_CATEGORIES)
+    ]
+    long["food_category_name"] = long["food_category_code"].map(FOOD_CATEGORIES)
+    return long[
+        [
+            "country_code",
+            "year",
+            "food_category_code",
+            "food_category_name",
+            "category_food_inflation_pct",
+        ]
+    ].sort_values(["country_code", "year", "food_category_code"])
 
 
 def get_headline_inflation() -> pd.DataFrame:
@@ -167,6 +218,7 @@ def get_food_price_level() -> pd.DataFrame:
         try:
             raw = fetch_eurostat(dataset, filters, cache_name)
             part = reshape_eurostat_long(raw, "food_price_level_index")
+            part["food_price_level_source"] = dataset
             part["source_priority"] = 0 if dataset == "prc_ppp_ind_1" else 1
             parts.append(part)
         except Exception as exc:
@@ -175,11 +227,7 @@ def get_food_price_level() -> pd.DataFrame:
     if not parts:
         raise RuntimeError("No usable Eurostat PPP food price dataset returned data")
 
-    combined = pd.concat(parts, ignore_index=True)
-    combined = combined.sort_values(
-        ["country_code", "year", "source_priority"]
-    ).drop_duplicates(["country_code", "year"], keep="first")
-    return combined.drop(columns=["source_priority"])
+    return combine_ppp_sources(parts)
 
 
 def get_food_share_budget() -> pd.DataFrame:

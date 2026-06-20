@@ -9,6 +9,8 @@ import streamlit as st
 from .config import REQUIRED_ANALYTIC_COLUMNS
 
 DATA_PATH = Path(__file__).resolve().parent.parent / "data" / "merged.parquet"
+CATEGORY_PATH = Path(__file__).resolve().parent.parent / "data" / "food_categories.parquet"
+QUALITY_PATH = Path(__file__).resolve().parent.parent / "data" / "data_quality.csv"
 EXCL_PATH = Path(__file__).resolve().parent.parent / "data" / "exclusions.csv"
 
 
@@ -32,6 +34,42 @@ def load_exclusions() -> pd.DataFrame:
     if not EXCL_PATH.exists():
         return pd.DataFrame(columns=["country_code", "year", "missing_columns"])
     return pd.read_csv(EXCL_PATH)
+
+
+@st.cache_data(show_spinner=False)
+def load_category_data() -> pd.DataFrame:
+    if not CATEGORY_PATH.exists():
+        raise FileNotFoundError(f"Missing {CATEGORY_PATH}. Run `python etl.py` first.")
+    df = pd.read_parquet(CATEGORY_PATH)
+    required = [
+        "country_code",
+        "country_name",
+        "region",
+        "year",
+        "food_category_code",
+        "food_category_name",
+        "category_food_inflation_pct",
+        "category_affordability_gap_pct",
+        "headline_inflation_pct_imputed",
+        "median_income_eur_imputed",
+        "food_price_level_index_imputed",
+        "food_share_budget_pct_imputed",
+        "meal_deprivation_pct_imputed",
+    ]
+    missing = [col for col in required if col not in df.columns]
+    if missing:
+        raise FileNotFoundError(
+            "data/food_categories.parquet uses an outdated schema. Run `python etl.py` "
+            f"again. Missing columns: {', '.join(missing)}"
+        )
+    return df
+
+
+@st.cache_data(show_spinner=False)
+def load_data_quality() -> pd.DataFrame:
+    if not QUALITY_PATH.exists():
+        raise FileNotFoundError(f"Missing {QUALITY_PATH}. Run `python etl.py` first.")
+    return pd.read_csv(QUALITY_PATH)
 
 
 def filter_df(
