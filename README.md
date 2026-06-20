@@ -1,120 +1,182 @@
 # Europe Food Affordability
 
-Interactive data-processing and visualisation project focused on food price affordability across Europe.
+Interactive Streamlit project analysing food-price pressure and household affordability across Europe.
 
-**Analytical question:** which European countries face the highest food price pressure, and how does it relate to headline inflation and household income?
+**Analytical question:** which countries and food categories face the strongest price pressure, and how does it relate to headline inflation, household income and social vulnerability?
 
-The dashboard combines annual Eurostat data for European countries and uses the **Food Affordability Gap** as the main interpretation metric: food inflation minus median income growth. It also reports the **Food Pressure Index (FPI)** as a secondary synthetic ratio.
+The main interpretation metric is the **Food Affordability Gap**:
 
-## How To Run
+```text
+food inflation − median income growth
+```
+
+A positive value means that food prices grew faster than nominal median income. It is a transparent pressure proxy, not a causal estimate or a complete measure of the cost of a healthy diet.
+
+## How to run
 
 ```powershell
-# 1. Environment (Python 3.11+)
 cd europe-food-affordability
 python -m venv .venv
 .venv\Scripts\activate
 pip install -r requirements.txt
 
-# 2. ETL: downloads Eurostat data and writes data/merged.parquet
 python etl.py
-
-# 3. Dashboard
 streamlit run app.py
 ```
 
-The app runs at `http://localhost:8501` by default.
+The dashboard is available at `http://localhost:8501` by default.
 
-ETL caches raw downloads in `data/raw/*.parquet`, writes the analytical table to `data/merged.parquet`, and logs excluded observations to `data/exclusions.csv`.
+## Required acceptance sequence
 
-## Data Sources
+Run acceptance checks in this order so that tests always use freshly generated
+artifacts:
 
-| # | Eurostat dataset | Project columns | Contents |
-| --- | --- | --- | --- |
-| 1 | `prc_hicp_aind` | `food_inflation_pct`, `headline_inflation_pct` | annual food inflation (CP01) and all-items inflation (CP00) |
-| 2 | `ilc_di03` | `median_income_eur`, `income_growth_pct` | median equivalised net income and year-over-year income growth |
-| 3 | `earn_mw_cur` | `minimum_wage_eur_month` | monthly minimum wage in EUR; semi-annual data averaged to years |
-| 4 | `prc_ppp_ind_1` with fallback to `prc_ppp_ind` | `food_price_level_index` | food price level index relative to EU27_2020=100 |
-| 5 | `nama_10_co3_p3` | `food_share_budget_pct` | food share in household final consumption expenditure |
-| 6 | `ilc_mdes03` | `meal_deprivation_pct` | share of people unable to afford a proper meal every second day |
-
-The project satisfies the requirement of at least three data sources while keeping all inputs thematically aligned around prices, income, and food affordability.
-
-## Merge Logic
-
-Common key:
-
-```python
-["country_code", "year"]
+```powershell
+python etl.py
+python -m py_compile app.py etl.py src/config.py src/data_loader.py src/etl_pipeline.py src/eurostat_sources.py src/metrics.py src/pca_analysis.py src/stats_tests.py src/transforms.py src/viz.py
+python -m pytest -q
+python -m pytest -q tests/test_methodology.py -k streamlit
 ```
 
-Pipeline:
+Missing ETL artifacts are a test failure, not a skipped test. The final command
+reruns the Streamlit smoke and interaction checks explicitly.
 
-```text
-HICP food/headline
-  -> median income + minimum wage
-  -> PPP food price level + food expenditure share
-  -> meal deprivation
-  -> outer merge on country_code/year
-  -> missing-data policy
-  -> derived metrics
-```
+## Analytical grains
 
-Country codes are normalised to ISO-2. `regions.csv` stores `country_code`, `iso3`, `country_name`, and `region`.
+The ETL deliberately maintains two different analytical views.
 
-## Missing-Data Policy
+| View | File | Unique key | Current size | Purpose |
+| --- | --- | --- | ---: | --- |
+| country–year | `data/merged.parquet` | `country_code, year` | 480 | KPI, maps, cumulative metrics, correlations, PCA and regional tests |
+| country–year–category | `data/food_categories.parquet` | `country_code, year, food_category_code` | 4,800 | category-level EDA, rankings, distributions and trends |
+
+The category view satisfies the course requirement of at least 1,000 genuine observations. Country-level income and social indicators are contextual variables in this view. They are not treated as 4,800 independent observations in correlations or statistical tests.
+
+The category pipeline distinguishes three counts: the raw Eurostat grid has 4,950
+country–year–category rows, including 50 missing HICP values; 4,900 HICP values are
+observed; and 4,800 rows remain in the final analytical view after joining to valid
+country–year context. Missing category HICP values are never interpolated.
+
+## Food categories
+
+The category view uses observed annual HICP rates from `prc_hicp_aind` with unit `RCH_A_AVG`.
+
+| Code | Category |
+| --- | --- |
+| `CP0111` | Bread and cereals |
+| `CP0112` | Meat |
+| `CP0113` | Fish and seafood |
+| `CP0114` | Milk, cheese and eggs |
+| `CP0115` | Oils and fats |
+| `CP0116` | Fruit |
+| `CP0117` | Vegetables |
+| `CP0118` | Sugar, jam, honey, chocolate and confectionery |
+| `CP0119` | Food products n.e.c. |
+| `CP012` | Non-alcoholic beverages |
+
+Category HICP values are not interpolated. The category view contains only observed Eurostat values joined to valid country–year context.
+
+## Data sources
+
+| Eurostat dataset | Project variables | Contents |
+| --- | --- | --- |
+| `prc_hicp_aind` | `food_inflation_pct`, `headline_inflation_pct`, `category_food_inflation_pct` | annual HICP rates for CP01, CP00 and detailed food categories |
+| `ilc_di03` | `median_income_eur`, `income_growth_pct` | median equivalised net income and annual growth |
+| `earn_mw_cur` | `minimum_wage_eur_month` | monthly minimum wage; semi-annual values averaged to years |
+| `prc_ppp_ind_1`, fallback `prc_ppp_ind` | `food_price_level_index` | food price level relative to EU27_2020=100 |
+| `nama_10_co3_p3` | `food_share_budget_pct` | food share of household final consumption |
+| `ilc_mdes03` | `meal_deprivation_pct` | inability to afford a proper meal every second day |
+
+All source tables are reshaped to long form and normalised to ISO-2 country codes. The primary merge key is `country_code, year`. The category dimension is added only to the dedicated category view.
+
+## ETL and data quality
+
+Raw downloads are cached in `data/raw/*.parquet`. ETL writes:
+
+- `data/merged.parquet`;
+- `data/food_categories.parquet`;
+- `data/data_quality.csv` with column types, missingness and imputation counts before and after ETL;
+- `data/exclusions.csv` with removed country–year observations;
+- `etl.log` with source and validation diagnostics.
+
+### Missing-data policy
 
 | Situation | Rule |
 | --- | --- |
-| gaps up to 2 years in hard columns: HICP and median income | linear interpolation by country |
-| gaps longer than 2 years in hard columns | row excluded and logged to `data/exclusions.csv` |
-| soft columns: PPP, expenditure share, meal deprivation, minimum wage | interpolation plus short `ffill`/`bfill` up to 3 years |
+| gaps up to 2 years in HICP CP01, HICP CP00 or median income | linear interpolation inside each country series |
+| remaining gaps in strict variables | row excluded and logged |
+| soft variables | interpolation plus limited `ffill`/`bfill` up to 3 years |
+| category HICP | no imputation; observed values only |
+
+Every interpolated source variable has a matching Boolean `*_imputed` column. These
+flags identify the exact country–year cells filled by the missing-data policy and are
+also carried into the category view for its repeated contextual variables.
+
+The PPP adapter prefers a non-null value from `prc_ppp_ind_1` and falls back at the value level to `prc_ppp_ind`. `food_price_level_source` records the source; values filled by the missing-data policy are labelled `interpolated`.
+
+ETL rejects outputs with duplicate keys, fewer than five numeric variables, years outside 2010–2024, infinite values or fewer than 1,000 category observations.
 
 ## Metrics
 
-| Metric | Type | Description | Interpretation |
-| --- | --- | --- | --- |
-| `food_affordability_gap_pct` | percentage points | `food_inflation_pct - income_growth_pct` | Higher values indicate weaker food affordability; positive values mean food prices grew faster than income. |
-| `fpi` | synthetic ratio | `food_inflation_pct / income_growth_pct`; values above 1 mean food prices grew faster than income; negative values can occur when income growth is negative | Higher values indicate stronger price pressure, but the ratio is unstable when income growth is close to zero. |
-| `food_inflation_pct` | % YoY | annual HICP CP01 food inflation | Higher values indicate faster food price growth and greater consumer pressure. |
-| `headline_inflation_pct` | % YoY | annual HICP CP00 all-items inflation | Higher values indicate faster growth of the general price level. |
-| `median_income_eur` | EUR/year | median equivalised net income | Higher values indicate a larger nominal income buffer. |
-| `income_growth_pct` | % YoY | country-level median income growth | Higher values indicate stronger income growth and greater capacity to absorb price increases. |
-| `food_share_budget_pct` | % | food share in household final consumption | Higher values indicate greater household budget sensitivity to food prices. |
-| `food_price_level_index` | EU27_2020=100 | relative food price level | Higher values indicate a higher food price level relative to the EU average. |
-| `meal_deprivation_pct` | % of population | inability to afford a proper meal every second day | Higher values indicate more severe social deprivation. |
-| `food_inflation_index_2020` | index | cumulative food price index with 2020=100 | Higher values indicate a higher accumulated food price level relative to 2020. |
+| Metric | Definition | Interpretation |
+| --- | --- | --- |
+| `food_affordability_gap_pct` | food inflation − income growth | positive means aggregate food prices outpaced nominal income |
+| `category_affordability_gap_pct` | category inflation − income growth | positive means the selected category outpaced nominal income |
+| `food_inflation_index_2020` | compound HICP CP01 index, 2020=100 | accumulated food-price level relative to 2020 |
+| `food_price_growth_2020_2024_pct` | change in the compound food index | accumulated food-price growth |
+| `income_growth_2020_2024_pct` | change in median income | accumulated nominal income growth |
+| `cumulative_affordability_gap_pct` | food-price growth − income growth | positive means food prices outpaced income over 2020–2024 |
 
-When `income_growth_pct` is close to zero, ETL sets FPI to missing to avoid unstable division.
+The unstable Food Pressure Index ratio was removed from ETL and all analytical outputs.
 
-The dashboard also computes view-level helper metrics for the 2020-2024 comparison:
+## Statistical methodology
 
-| Metric | Type | Description | Interpretation |
-| --- | --- | --- | --- |
-| `food_price_growth_2020_2024_pct` | % change | cumulative food price growth between 2020 and 2024 | Higher values indicate stronger accumulated food price growth. |
-| `income_growth_2020_2024_pct` | % change | cumulative median income growth between 2020 and 2024 | Higher values indicate stronger accumulated income growth. |
-| `cumulative_affordability_gap_pct` | percentage points | cumulative food price growth minus cumulative income growth | Higher values indicate weaker food affordability; positive values mean food prices outpaced income. |
+### EDA and anomalies
 
-## Dashboard Structure
+The dashboard reports both data grains, column types, missing values before and after ETL, and descriptive statistics: count, mean, median, standard deviation, quartiles, minimum and maximum.
 
-| # | Section | Visualisation | Filters |
-| --- | --- | --- | --- |
-| 1 | KPI Bar | scorecards for largest affordability gap, average food inflation, food budget share, median gap | year |
-| 2 | Country Diagnosis | driver metrics and driver bar for a selected country | country, year |
-| 3 | Europe Map | Plotly choropleth with missing countries greyed out | year, metric |
-| 4 | 2020-2024 Cumulative Pressure | bar ranking and table comparing food price growth with income growth | countries, regions |
-| 5 | Country Typology | segment scatter and segment counts | year |
-| 6 | Time Trends | multi-country line charts for food inflation and affordability gap | countries, years |
-| 7 | Income vs Food Inflation | scatter with OLS trend | regions, years |
-| 8 | Distributions and Anomalies | box plot, histogram, Z-score outlier table | metric |
-| 9 | Correlations and PCA | Pearson/Spearman heatmap, Holm-adjusted p-values, country-year heatmap, PCA biplot, scree plot | method |
-| 10 | Statistical Tests | ANOVA, Mann-Whitney, bootstrap CI, Chi-square | metric |
-| 11 | Prediction and Forecast | affordability-gap regression, panel fixed effects, ARIMA forecast | features, country |
-| 12 | Analytical Conclusions and Limitations | filter-aware notes and interpretation caveats | global filters |
-| 13 | Data Export | CSV download for current view and full dataset | global filters |
+Histograms use the Freedman–Diaconis rule with a Sturges fallback. Anomalies are detected in the reference-year cross-section using Tukey's `1.5 × IQR` fences. An anomaly is an unusual observation, not automatically a data error.
 
-All sections respond to global sidebar filters.
+### Correlations
 
-## Project Structure
+Correlations use one country observation in the selected reference year. Spearman is the default and Pearson is optional. Pairwise-complete samples, pair counts and Holm-adjusted p-values are reported. The affordability gap is excluded from this matrix because it is constructed from food inflation and income growth.
+
+### PCA
+
+PCA is fitted on standardised country–year indicators. The selected dimensionality is the smallest number of components explaining at least 80% of cumulative variance. The dashboard reports individual and cumulative variance, the selected `k`, complete-case count, correlation loadings and a PC1–PC2 biplot.
+
+### Regional tests
+
+Regional inference uses one country observation in the reference year and `α = 0.05`.
+
+1. Shapiro–Wilk is checked within regions.
+2. Brown–Forsythe/Levene uses median centring.
+3. If all normality checks and equal variances pass, the main test is one-way ANOVA with omega squared.
+4. Otherwise the main test is Kruskal–Wallis with epsilon squared.
+5. The dashboard states an explicit decision about H0.
+6. Post-hoc runs only after a significant global result: Tukey HSD after ANOVA or pairwise Mann–Whitney with Holm correction and Cliff's delta after Kruskal–Wallis.
+
+Kruskal–Wallis and Mann–Whitney are interpreted as distribution/rank comparisons, not universal tests of medians.
+
+## Dashboard structure
+
+1. KPI
+2. Data structure and quality
+3. Country diagnosis
+4. Europe map
+5. Cumulative pressure 2020–2024
+6. Detailed food categories
+7. Time trends
+8. Income and food prices
+9. Distributions and IQR anomalies
+10. Reference-year correlations and PCA
+11. Statistical tests
+12. Conclusions and limitations
+13. Export of both analytical grains
+
+Global year, region and country filters affect both data views. The category selector is local to the category section. The global ETL audit intentionally remains independent of dashboard filters. The cumulative 2020–2024 section is calculated only when both endpoints are included in the selected year range.
+
+## Project structure
 
 ```text
 europe-food-affordability/
@@ -130,71 +192,27 @@ europe-food-affordability/
 │   ├── data_loader.py
 │   ├── metrics.py
 │   ├── stats_tests.py
-│   ├── regression.py
 │   ├── pca_analysis.py
-│   ├── forecast.py
 │   └── viz.py
-├── data/
-│   ├── regions.csv
-│   ├── raw/
-│   ├── merged.parquet
-│   └── exclusions.csv
-├── .streamlit/
-│   └── config.toml
-└── etl.log
+├── tests/
+│   └── test_methodology.py
+└── data/
+    ├── regions.csv
+    ├── raw/
+    ├── merged.parquet
+    ├── food_categories.parquet
+    ├── data_quality.csv
+    └── exclusions.csv
 ```
 
-## Method Notes
+## Scope and limitations
 
-The project uses bootstrap confidence intervals for regional means in the selected reference year. Each country appears once in that section, so the resampling unit is the country observation.
+- Results are descriptive and comparative, not causal.
+- Country aggregates do not represent within-country household inequality.
+- Interpolation can smooth abrupt changes; category HICP is therefore kept observed-only.
+- Median income in EUR can be affected by exchange-rate changes outside the euro area.
+- Regional groups are analytical groupings with small sample sizes.
+- Pairwise-complete samples can differ between correlations.
+- The 2020–2024 endpoint comparison does not replace inspection of the full time series.
 
-ANOVA is reported with Kruskal-Wallis, Levene checks, and Shapiro-Wilk diagnostics because regional distributions can be skewed, non-normal, and heteroskedastic.
-
-Pairwise regional tests use Mann-Whitney U with Holm-Bonferroni correction. Correlation matrices use pairwise complete observations and correlation p-values are Holm-adjusted.
-
-The Chi-square section reports Cramer's V and the minimum expected cell count. Results with expected counts below 5 are treated as descriptive diagnostics rather than strong confirmatory evidence.
-
-Outlier tables rank country-year observations by the absolute Z-score of the selected metric. This highlights values farthest from the current filtered mean.
-
-Country typology is rule-based and uses current-filter medians of the affordability gap, food spending share, income, and meal deprivation. It is intended as an interpretation aid, not a formal clustering model.
-
-PCA is fitted on standardised variables, so features measured in EUR, percentages, and indices are comparable. The biplot shows country-year similarity in the first two components, while the scree plot shows how much variance each component explains.
-
-The predictive regression and panel fixed-effects model use `food_affordability_gap_pct` as the default target because it is the main interpretation metric and is more stable than the FPI ratio. `income_growth_pct` is excluded from the default predictors because it is part of the affordability-gap formula and would create target leakage.
-
-`food_price_level_index` and `minimum_wage_eur_month` are optional regression features because their historical coverage is weaker.
-
-The ARIMA forecast is a short-run exploratory forecast for annual food inflation. The dashboard reports ADF p-value, AIC, BIC, observation count, and simple baselines. Seasonal models such as SARIMA are not used because the project uses annual series with about 15 observations per country.
-
-Eurostat is migrating PPP data to COICOP 2018 in `prc_ppp_ind_1`; the ETL first tries the newer source and falls back to `prc_ppp_ind` for historical food price-level data.
-
-The dashboard is exploratory. It describes observed relationships and does not establish causality.
-
-Main interpretation limits:
-
-- country-level aggregates do not show inequality within countries;
-- some missing values are interpolated in ETL;
-- FPI is sensitive when income growth is close to zero or negative, so the affordability gap is the safer headline metric;
-- 2020-2024 cumulative comparisons require data in both endpoint years and do not replace full time-series interpretation.
-
-## Methodological Fit and Exclusions
-
-The current analytical table contains 480 country-year observations, covering 33 countries from 2010 to 2024. This is below the literal 1000-observation EDA threshold mentioned in the course notes, but it is a coherent macroeconomic panel: each row is a country-year observation built from official Eurostat series. The project therefore prioritises consistency, country coverage, and interpretable joins over artificially expanding the dataset.
-
-PCA is retained because the dashboard uses several numeric indicators measured on different scales and the method is appropriate after standardisation. In the current cached dataset, PCA has 197 complete rows because `food_price_level_index` has weaker historical coverage.
-
-The following methods are intentionally not used:
-
-- t-SNE and UMAP: they could suggest unstable visual clusters with this sample size and small number of core numeric features.
-- LDA: it requires supervised class labels and a classification objective, while this project is exploratory and comparative.
-- Autoencoders: they are not appropriate for a small tabular macroeconomic dataset.
-- SARIMA and seasonal decomposition: the data are annual, so there is no within-year seasonality to model.
-- ACF/PACF as a dashboard section: with about 15 annual points per country, these diagnostics would be unstable and could be overinterpreted.
-
-Main methodological caveats:
-
-- interpolation smooths short missing-data gaps and can dampen abrupt changes;
-- PPP food price-level data have weaker coverage than HICP, income, and expenditure-share data;
-- country-level aggregates do not capture inequality within countries;
-- regional statistical tests have small group sizes, so non-parametric results and effect sizes should be read alongside p-values;
-- the dashboard is exploratory and comparative, not causal.
+Ridge, Random Forest, panel fixed-effects regression, ARIMA, rule-based country typology and the synthetic vulnerability score were deliberately excluded because they were optional and could not be validated strongly enough within the project's scope.

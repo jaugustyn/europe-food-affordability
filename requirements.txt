@@ -7,4 +7,6 @@ scipy>=1.13
 scikit-learn>=1.4
 statsmodels>=0.14
 requests>=2.31
+pytest>=8.0
 eurostat>=1.0.0
+pytest>=8.0
