@@ -70,11 +70,10 @@ def reshape_eurostat_long(
     long = long[(long["year"] >= YEAR_MIN) & (long["year"] <= YEAR_MAX)]
 
     if aggregate_semesters:
-        return (
-            long.groupby(["country_code", "year"], as_index=False)[value_col]
-            .mean()
-            .sort_values(["country_code", "year"])
+        aggregated = long.groupby(["country_code", "year"], as_index=False).agg(
+            **{value_col: (value_col, "mean")}
         )
+        return aggregated.sort_values(by=["country_code", "year"])
 
     return long[["country_code", "year", value_col]].sort_values(
         ["country_code", "year"]

@@ -355,12 +355,13 @@ def category_ranking_bar(df: pd.DataFrame, year: int, category_name: str) -> go.
 def heatmap_corr(corr: pd.DataFrame, title: str = "Korelacje metryk") -> go.Figure:
     fig = px.imshow(
         corr,
-        text_auto=".2f",
+        text_auto=True,
         aspect="auto",
         color_continuous_scale="RdBu_r",
         zmin=-1,
         zmax=1,
     )
+    fig.update_traces(texttemplate="%{z:.2f}")
     return _apply_layout(fig, title)
 
 
@@ -436,9 +437,11 @@ def pca_biplot(scores: pd.DataFrame, loadings: pd.DataFrame, explained: list[flo
         label_y=lambda x: x["PC2"] * 2.9,
     ).sort_values("label_y").reset_index(drop=True)
     min_gap = 0.22
-    for i in range(1, len(endpoints)):
-        if endpoints.loc[i, "label_y"] - endpoints.loc[i - 1, "label_y"] < min_gap:
-            endpoints.loc[i, "label_y"] = endpoints.loc[i - 1, "label_y"] + min_gap
+    label_y = endpoints["label_y"].to_numpy(dtype=float, copy=True)
+    for i in range(1, len(label_y)):
+        if label_y[i] - label_y[i - 1] < min_gap:
+            label_y[i] = label_y[i - 1] + min_gap
+    endpoints["label_y"] = label_y
 
     for _, row in endpoints.iterrows():
         end_x = row["PC1"] * 2.35
