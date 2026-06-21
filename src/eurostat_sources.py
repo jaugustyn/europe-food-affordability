@@ -48,6 +48,53 @@ def _country_column(df: pd.DataFrame) -> str:
     return next(c for c in df.columns if str(c).lower().startswith("geo"))
 
 
+def _select_dimension_profile(
+    df: pd.DataFrame,
+    profiles: list[dict[str, set[str]]],
+    source_name: str,
+) -> pd.DataFrame:
+    """Select one supported Eurostat dimension schema and validate its values."""
+    matched_schemas: list[str] = []
+    for profile in profiles:
+        if not set(profile).issubset(df.columns):
+            continue
+        expected = ", ".join(
+            f"{column}={sorted(allowed)}" for column, allowed in profile.items()
+        )
+        matched_schemas.append(expected)
+        selected = df.copy()
+        for column, allowed in profile.items():
+            selected = selected[selected[column].astype(str).isin(allowed)]
+        if not selected.empty:
+            return selected
+
+    if matched_schemas:
+        raise ValueError(
+            f"{source_name}: no rows match supported profiles: {matched_schemas}"
+        )
+
+    available = [str(column) for column in df.columns if column not in _time_columns(df)]
+    raise ValueError(
+        f"{source_name}: unsupported Eurostat dimensions. Available: {available}"
+    )
+
+
+def _validate_country_year_key(df: pd.DataFrame, value_col: str) -> None:
+    duplicates = df.duplicated(["country_code", "year"], keep=False)
+    if not duplicates.any():
+        return
+    sample = (
+        df.loc[duplicates, ["country_code", "year"]]
+        .drop_duplicates()
+        .head(5)
+        .to_dict("records")
+    )
+    raise ValueError(
+        f"{value_col}: Eurostat source is not unique by country-year after filtering. "
+        f"Sample duplicate keys: {sample}"
+    )
+
+
 def reshape_eurostat_long(
     df: pd.DataFrame,
     value_col: str,
@@ -75,9 +122,11 @@ def reshape_eurostat_long(
         )
         return aggregated.sort_values(by=["country_code", "year"])
 
-    return long[["country_code", "year", value_col]].sort_values(
+    result = long[["country_code", "year", value_col]].sort_values(
         ["country_code", "year"]
     )
+    _validate_country_year_key(result, value_col)
+    return result
 
 
 def _first_working_dataset(specs: Iterable[tuple[str, dict, str]], value_col: str) -> pd.DataFrame:
@@ -172,9 +221,28 @@ def get_median_income() -> pd.DataFrame:
             "age": ["TOTAL"],
             "sex": ["T"],
             "indic_il": ["MED_E"],
+            "statinfo": ["MED_EI"],
             "unit": ["EUR"],
         },
         "eurostat_median_income",
+    )
+    raw = _select_dimension_profile(
+        raw,
+        [
+            {
+                "age": {"TOTAL"},
+                "sex": {"T"},
+                "statinfo": {"MED_EI"},
+                "unit": {"EUR"},
+            },
+            {
+                "age": {"TOTAL"},
+                "sex": {"T"},
+                "indic_il": {"MED_E"},
+                "unit": {"EUR"},
+            },
+        ],
+        "ilc_di03 median income",
     )
     return reshape_eurostat_long(raw, "median_income_eur")
 
@@ -243,7 +311,29 @@ def get_meal_deprivation() -> pd.DataFrame:
     """People unable to afford a proper meal every second day, percent."""
     raw = fetch_eurostat(
         "ilc_mdes03",
-        {"hhtyp": ["TOTAL"], "incgrp": ["TOTAL"], "unit": ["PC"]},
+        {
+            "hhtyp": ["TOTAL"],
+            "incgrp": ["TOTAL"],
+            "hhcomp": ["TOTAL"],
+            "rskpovth": ["TOTAL"],
+            "unit": ["PC"],
+        },
         "eurostat_meal_deprivation",
+    )
+    raw = _select_dimension_profile(
+        raw,
+        [
+            {
+                "hhcomp": {"TOTAL"},
+                "rskpovth": {"TOTAL"},
+                "unit": {"PC"},
+            },
+            {
+                "hhtyp": {"TOTAL"},
+                "incgrp": {"TOTAL"},
+                "unit": {"PC"},
+            },
+        ],
+        "ilc_mdes03 meal deprivation",
     )
     return reshape_eurostat_long(raw, "meal_deprivation_pct")

@@ -10,7 +10,8 @@ from streamlit.testing.v1 import AppTest
 
 from src.config import REQUIRED_ANALYTIC_COLUMNS
 from src.etl_pipeline import _quality_profile
-from src.eurostat_sources import combine_ppp_sources
+import src.eurostat_sources as eurostat_sources
+from src.eurostat_sources import combine_ppp_sources, reshape_eurostat_long
 from src.pca_analysis import fit_pca
 from src.stats_tests import (
     iqr_outliers,
@@ -60,6 +61,75 @@ def test_ppp_keeps_missing_when_both_sources_are_missing() -> None:
     ).iloc[0]
     assert pd.isna(result["food_price_level_index"])
     assert pd.isna(result["food_price_level_source"])
+
+
+@pytest.mark.parametrize(
+    ("dimension", "selected", "other"),
+    [
+        ("indic_il", "MED_E", "MEAN_E"),
+        ("statinfo", "MED_EI", "MEAN_EI"),
+    ],
+)
+def test_median_income_supports_old_and_new_eurostat_dimensions(
+    monkeypatch: pytest.MonkeyPatch,
+    dimension: str,
+    selected: str,
+    other: str,
+) -> None:
+    raw = pd.DataFrame(
+        {
+            "freq": ["A", "A"],
+            "age": ["TOTAL", "TOTAL"],
+            "sex": ["T", "T"],
+            dimension: [other, selected],
+            "unit": ["EUR", "EUR"],
+            "geo\\TIME_PERIOD": ["PL", "PL"],
+            "2024": [30_000.0, 20_000.0],
+        }
+    )
+    monkeypatch.setattr(eurostat_sources, "fetch_eurostat", lambda *_args, **_kwargs: raw)
+    result = eurostat_sources.get_median_income()
+    assert result[["country_code", "year", "median_income_eur"]].to_dict("records") == [
+        {"country_code": "PL", "year": 2024, "median_income_eur": 20_000.0}
+    ]
+
+
+@pytest.mark.parametrize(
+    ("household_dimension", "risk_dimension"),
+    [("hhtyp", "incgrp"), ("hhcomp", "rskpovth")],
+)
+def test_meal_deprivation_supports_old_and_new_eurostat_dimensions(
+    monkeypatch: pytest.MonkeyPatch,
+    household_dimension: str,
+    risk_dimension: str,
+) -> None:
+    raw = pd.DataFrame(
+        {
+            "freq": ["A", "A", "A"],
+            household_dimension: ["TOTAL", "TOTAL", "A1"],
+            risk_dimension: ["TOTAL", "A_60", "TOTAL"],
+            "unit": ["PC", "PC", "PC"],
+            "geo\\TIME_PERIOD": ["PL", "PL", "PL"],
+            "2024": [4.5, 8.0, 6.0],
+        }
+    )
+    monkeypatch.setattr(eurostat_sources, "fetch_eurostat", lambda *_args, **_kwargs: raw)
+    result = eurostat_sources.get_meal_deprivation()
+    assert result[["country_code", "year", "meal_deprivation_pct"]].to_dict("records") == [
+        {"country_code": "PL", "year": 2024, "meal_deprivation_pct": 4.5}
+    ]
+
+
+def test_reshape_rejects_unfiltered_duplicate_country_year_rows() -> None:
+    raw = pd.DataFrame(
+        {
+            "variant": ["A", "B"],
+            "geo\\TIME_PERIOD": ["PL", "PL"],
+            "2024": [1.0, 2.0],
+        }
+    )
+    with pytest.raises(ValueError, match="not unique by country-year"):
+        reshape_eurostat_long(raw, "value")
 
 
 def test_generated_data_contracts() -> None:
