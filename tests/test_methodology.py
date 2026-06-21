@@ -14,11 +14,12 @@ from src.eurostat_sources import combine_ppp_sources
 from src.pca_analysis import fit_pca
 from src.stats_tests import (
     iqr_outliers,
+    mask_imputed_values,
     pvalue_matrix,
     sample_size_matrix,
     select_region_test,
 )
-from src.transforms import apply_missing_policy
+from src.transforms import add_food_pressure_metrics, add_income_growth, apply_missing_policy
 from src.viz import freedman_diaconis_bins
 
 
@@ -112,6 +113,14 @@ def test_generated_data_contracts() -> None:
         assert len(report_row) == 1
         assert int(report_row.iloc[0]["imputed_count"]) == int(main[flag_col].sum())
     assert not np.isinf(main.select_dtypes(include=[np.number]).to_numpy()).any()
+    assert {
+        "income_growth_pct_imputed",
+        "food_affordability_gap_pct_imputed",
+    }.issubset(main.columns)
+    assert {
+        "income_growth_pct_imputed",
+        "category_affordability_gap_pct_imputed",
+    }.issubset(categories.columns)
 
 
 def test_missing_policy_marks_only_values_it_fills() -> None:
@@ -130,6 +139,36 @@ def test_missing_policy_marks_only_values_it_fills() -> None:
     counts = profile.set_index("column")["imputed_count"]
     assert counts["strict"] == 1
     assert counts["soft"] == 2
+
+
+def test_imputation_flags_propagate_to_derived_metrics() -> None:
+    frame = pd.DataFrame(
+        {
+            "country_code": ["AA", "AA", "AA"],
+            "year": [2020, 2021, 2022],
+            "median_income_eur": [100.0, 110.0, 121.0],
+            "median_income_eur_imputed": [False, True, False],
+            "food_inflation_pct": [2.0, 3.0, 4.0],
+            "food_inflation_pct_imputed": [False, False, True],
+        }
+    )
+    result = add_food_pressure_metrics(add_income_growth(frame))
+    assert result["income_growth_pct_imputed"].tolist() == [False, True, True]
+    assert result["food_affordability_gap_pct_imputed"].tolist() == [False, True, True]
+
+
+def test_inferential_mask_replaces_only_imputed_metric_cells() -> None:
+    frame = pd.DataFrame(
+        {
+            "value": [1.0, 2.0, 3.0],
+            "value_imputed": [False, True, False],
+            "other": [4.0, 5.0, 6.0],
+        }
+    )
+    observed, counts = mask_imputed_values(frame, ["value", "other"])
+    assert counts == {"value": 1, "other": 0}
+    assert observed["value"].isna().tolist() == [False, True, False]
+    assert observed["other"].tolist() == frame["other"].tolist()
 
 
 def test_iqr_detects_only_extreme_observation() -> None:
@@ -175,13 +214,18 @@ def _pca_frame(n: int = 80) -> pd.DataFrame:
 
 
 def test_pca_selects_smallest_k_reaching_threshold() -> None:
-    result = fit_pca(_pca_frame(), variance_threshold=0.80)
+    frame = _pca_frame()
+    frame["food_share_budget_pct_imputed"] = False
+    frame.loc[:4, "food_share_budget_pct_imputed"] = True
+    result = fit_pca(frame, variance_threshold=0.80)
     cumulative = np.asarray(result["cumulative_variance_full"])
     k = result["selected_k"]
     assert cumulative[k - 1] >= 0.80
     if k > 1:
         assert cumulative[k - 2] < 0.80
     assert list(result["loadings"].columns) == ["feature", "PC1", "PC2"]
+    assert result["n"] == len(frame) - 5
+    assert result["imputed_rows_excluded"] == 5
 
 
 def _regional_frame(groups: list[np.ndarray]) -> pd.DataFrame:
@@ -284,6 +328,16 @@ def test_streamlit_interactions_cover_methods_filters_and_posthoc_gate() -> None
     assert any("rozkłady i rangi" in item.value for item in app.markdown)
     assert any("Post-hoc wykonany" in item.value for item in app.markdown)
 
+    _element_by_label(app.selectbox, "Metryka testowana").set_value(
+        "food_share_budget_pct"
+    ).run()
+    assert any(
+        "wykluczono 28 imputowanych obserwacji" in item.value
+        for item in app.caption
+    )
+    assert any("Brak wystarczających danych obserwowanych" in item.value for item in app.info)
+    assert any("Przedziały bootstrapowe pominięto" in item.value for item in app.info)
+
     region_filter = _element_by_label(app.multiselect, "Regiony")
     region_filter.set_value(["Eastern", "Western"]).run()
     assert _element_by_label(app.multiselect, "Regiony").value == ["Eastern", "Western"]
@@ -296,6 +350,21 @@ def test_streamlit_interactions_cover_methods_filters_and_posthoc_gate() -> None
     year_filter = _element_by_label(app.slider, "Zakres lat")
     year_filter.set_range(2015, 2023).run()
     assert not app.exception
+    assert any(
+        "wymaga, aby globalny filtr lat obejmował jednocześnie 2020 i 2024"
+        in item.value
+        for item in app.info
+    )
+
+
+def test_streamlit_accepts_single_year_range() -> None:
+    app = AppTest.from_file(str(ROOT / "app.py"), default_timeout=60).run()
+    year_filter = _element_by_label(app.slider, "Zakres lat")
+    year_filter.set_range(2024, 2024).run()
+
+    assert not app.exception
+    assert any("Rok referencyjny: **2024**" in item.value for item in app.caption)
+    assert any("Rok mapy: **2024**" in item.value for item in app.caption)
     assert any(
         "wymaga, aby globalny filtr lat obejmował jednocześnie 2020 i 2024"
         in item.value
