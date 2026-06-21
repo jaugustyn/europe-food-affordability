@@ -111,6 +111,9 @@ Raw downloads are cached in `data/raw/*.parquet`. ETL writes:
 Every interpolated source variable has a matching Boolean `*_imputed` column. These
 flags identify the exact country–year cells filled by the missing-data policy and are
 also carried into the category view for its repeated contextual variables.
+Flags are propagated to derived income-growth and affordability-gap metrics. Imputed
+values remain available for descriptive maps and trends, but are treated as missing in
+correlations, regional hypothesis tests and PCA.
 
 The PPP adapter prefers a non-null value from `prc_ppp_ind_1` and falls back at the value level to `prc_ppp_ind`. `food_price_level_source` records the source; values filled by the missing-data policy are labelled `interpolated`.
 
@@ -139,15 +142,15 @@ Histograms use the Freedman–Diaconis rule with a Sturges fallback. Anomalies a
 
 ### Correlations
 
-Correlations use one country observation in the selected reference year. Spearman is the default and Pearson is optional. Pairwise-complete samples, pair counts and Holm-adjusted p-values are reported. The affordability gap is excluded from this matrix because it is constructed from food inflation and income growth.
+Correlations use one country observation in the selected reference year. Spearman is the default and Pearson is optional. Imputed cells are masked before calculation. Pairwise-complete samples, pair counts and Holm-adjusted p-values are reported. The affordability gap is excluded from this matrix because it is constructed from food inflation and income growth.
 
 ### PCA
 
-PCA is fitted on standardised country–year indicators. The selected dimensionality is the smallest number of components explaining at least 80% of cumulative variance. The dashboard reports individual and cumulative variance, the selected `k`, complete-case count, correlation loadings and a PC1–PC2 biplot.
+PCA is fitted on standardised country–year indicators after removing rows containing an imputed PCA feature. The selected dimensionality is the smallest number of components explaining at least 80% of cumulative variance. The dashboard reports individual and cumulative variance, the selected `k`, complete-case count, number of excluded imputed rows, correlation loadings and a PC1–PC2 biplot.
 
 ### Regional tests
 
-Regional inference uses one country observation in the reference year and `α = 0.05`.
+Regional inference uses one country observation in the reference year, observed values only and `α = 0.05`. Imputed observations are excluded separately for the selected metric and their count is reported.
 
 1. Shapiro–Wilk is checked within regions.
 2. Brown–Forsythe/Levene uses median centring.
@@ -193,7 +196,16 @@ europe-food-affordability/
 │   ├── metrics.py
 │   ├── stats_tests.py
 │   ├── pca_analysis.py
-│   └── viz.py
+│   ├── viz.py
+│   └── dashboard/
+│       ├── layout.py
+│       ├── state.py
+│       ├── support.py
+│       └── sections/
+│           ├── overview.py
+│           ├── exploration.py
+│           ├── methodology.py
+│           └── output.py
 ├── tests/
 │   └── test_methodology.py
 └── data/
@@ -209,7 +221,7 @@ europe-food-affordability/
 
 - Results are descriptive and comparative, not causal.
 - Country aggregates do not represent within-country household inequality.
-- Interpolation can smooth abrupt changes; category HICP is therefore kept observed-only.
+- Interpolation can smooth abrupt changes; category HICP is therefore kept observed-only, and all imputations are excluded from inferential analyses.
 - Median income in EUR can be affected by exchange-rate changes outside the euro area.
 - Regional groups are analytical groupings with small sample sizes.
 - Pairwise-complete samples can differ between correlations.
