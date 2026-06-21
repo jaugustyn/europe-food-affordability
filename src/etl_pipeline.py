@@ -177,6 +177,7 @@ def run_pipeline() -> pd.DataFrame:
         "median_income_eur",
         "median_income_eur_imputed",
         "income_growth_pct",
+        "income_growth_pct_imputed",
         "minimum_wage_eur_month",
         "minimum_wage_eur_month_imputed",
         "food_price_level_index",
@@ -187,6 +188,7 @@ def run_pipeline() -> pd.DataFrame:
         "meal_deprivation_pct",
         "meal_deprivation_pct_imputed",
         "food_affordability_gap_pct",
+        "food_affordability_gap_pct_imputed",
         "food_inflation_index_2020",
     ]
     df = df[[c for c in ordered_cols if c in df.columns]]
@@ -202,6 +204,7 @@ def run_pipeline() -> pd.DataFrame:
         "median_income_eur",
         "median_income_eur_imputed",
         "income_growth_pct",
+        "income_growth_pct_imputed",
         "food_price_level_index",
         "food_price_level_index_imputed",
         "food_price_level_source",
@@ -216,6 +219,10 @@ def run_pipeline() -> pd.DataFrame:
     category_df["category_affordability_gap_pct"] = (
         category_df["category_food_inflation_pct"] - category_df["income_growth_pct"]
     )
+    if "income_growth_pct_imputed" in category_df.columns:
+        category_df["category_affordability_gap_pct_imputed"] = category_df[
+            "income_growth_pct_imputed"
+        ].fillna(False).astype(bool)
     category_df = category_df.sort_values(
         ["country_code", "year", "food_category_code"]
     ).reset_index(drop=True)

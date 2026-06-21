@@ -24,7 +24,14 @@ def fit_pca(
 ) -> dict:
     """Fit PCA on standardised features and return embedding and diagnostics."""
     feats = features or DEFAULT_PCA_FEATURES
-    sub = df[feats + ["country_name", "year", "region"]].dropna().copy()
+    imputation_flags = [f"{feature}_imputed" for feature in feats]
+    available_flags = [flag for flag in imputation_flags if flag in df.columns]
+    if available_flags:
+        imputed_rows = df[available_flags].fillna(False).astype(bool).any(axis=1)
+    else:
+        imputed_rows = pd.Series(False, index=df.index, dtype=bool)
+    eligible = df.loc[~imputed_rows]
+    sub = eligible[feats + ["country_name", "year", "region"]].dropna().copy()
     if len(sub) < n_components + 5:
         raise ValueError(f"Za mało kompletnych obserwacji ({len(sub)}) do PCA.")
 
@@ -32,6 +39,8 @@ def fit_pca(
     max_components = min(len(feats), len(sub))
     pca = PCA(n_components=max_components, random_state=42)
     coords = pca.fit_transform(X)
+    if pca.components_ is None or pca.explained_variance_ is None:
+        raise RuntimeError("PCA did not expose fitted components and variances.")
 
     embedding = sub[["country_name", "year", "region"]].copy()
     for i in range(n_components):
@@ -64,5 +73,6 @@ def fit_pca(
         "selected_k": selected_k,
         "variance_threshold": float(variance_threshold),
         "n": len(sub),
+        "imputed_rows_excluded": int(imputed_rows.sum()),
         "features": feats,
     }

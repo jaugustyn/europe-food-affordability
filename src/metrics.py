@@ -129,46 +129,6 @@ def bootstrap_ci(
     return float(arr.mean()), float(low), float(high)
 
 
-def cluster_bootstrap_ci(
-    df: pd.DataFrame,
-    value_col: str,
-    cluster_col: str = "country_code",
-    n_iter: int = 1000,
-    alpha: float = 0.05,
-    seed: int = 42,
-) -> tuple[float, float, float, int]:
-    """Cluster bootstrap CI for a mean, resampling whole countries.
-
-    Row-level bootstrap treats every country-year as independent. For panel data
-    this is too optimistic because observations from the same country are
-    correlated over time. Cluster bootstrap samples countries with replacement
-    and keeps all selected years for each sampled country.
-    """
-    sub = df[[cluster_col, value_col]].dropna().copy()
-    if sub.empty:
-        return (np.nan, np.nan, np.nan, 0)
-
-    clusters = sub[cluster_col].dropna().unique()
-    n_clusters = len(clusters)
-    observed_mean = float(sub[value_col].mean())
-    if n_clusters <= 1:
-        return (observed_mean, observed_mean, observed_mean, n_clusters)
-
-    grouped = {
-        cluster: np.asarray(sub.loc[sub[cluster_col] == cluster, value_col], dtype=float)
-        for cluster in clusters
-    }
-    rng = np.random.default_rng(seed)
-    means = np.empty(n_iter, dtype=float)
-    for i in range(n_iter):
-        sampled_clusters = rng.choice(clusters, size=n_clusters, replace=True)
-        sampled_values = np.concatenate([grouped[cluster] for cluster in sampled_clusters])
-        means[i] = sampled_values.mean()
-
-    low, high = np.percentile(means, [100 * alpha / 2, 100 * (1 - alpha / 2)])
-    return observed_mean, float(low), float(high), n_clusters
-
-
 def iqr_outliers(s: pd.Series, k: float = 1.5) -> pd.Series:
     """Boolean mask of values outside [Q1 - k*IQR, Q3 + k*IQR]."""
     q1, q3 = s.quantile(0.25), s.quantile(0.75)

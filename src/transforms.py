@@ -41,7 +41,11 @@ def apply_missing_policy(
         df[f"{col}_imputed"] = missing_before & df[col].notna()
 
     present_strict = [c for c in strict_cols if c in df.columns]
-    mask_bad = df[present_strict].isna().any(axis=1) if present_strict else False
+    mask_bad = (
+        df[present_strict].isna().any(axis=1)
+        if present_strict
+        else pd.Series(False, index=df.index, dtype=bool)
+    )
     for _, row in df[mask_bad].iterrows():
         missing = [c for c in present_strict if pd.isna(row[c])]
         exclusions.append(
@@ -66,6 +70,14 @@ def add_income_growth(df: pd.DataFrame) -> pd.DataFrame:
         .pct_change(fill_method=None)
         .mul(100)
     )
+    if "median_income_eur_imputed" in df.columns:
+        current_imputed = df["median_income_eur_imputed"].fillna(False).astype(bool)
+        previous_imputed = (
+            current_imputed.groupby(df["country_code"])
+            .shift(1, fill_value=False)
+            .astype(bool)
+        )
+        df["income_growth_pct_imputed"] = current_imputed | previous_imputed
     return df
 
 
@@ -75,6 +87,14 @@ def add_food_pressure_metrics(df: pd.DataFrame) -> pd.DataFrame:
     df["food_affordability_gap_pct"] = (
         df["food_inflation_pct"].astype(float) - df["income_growth_pct"].astype(float)
     )
+    if {
+        "food_inflation_pct_imputed",
+        "income_growth_pct_imputed",
+    }.issubset(df.columns):
+        df["food_affordability_gap_pct_imputed"] = (
+            df["food_inflation_pct_imputed"].fillna(False).astype(bool)
+            | df["income_growth_pct_imputed"].fillna(False).astype(bool)
+        )
 
     base_year = 2020
     df = df.sort_values(["country_code", "year"])

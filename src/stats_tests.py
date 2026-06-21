@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from itertools import combinations
+from typing import Literal, TypedDict, cast
 import warnings
 
 import numpy as np
@@ -11,9 +12,57 @@ from statsmodels.stats.multitest import multipletests
 from statsmodels.stats.multicomp import pairwise_tukeyhsd
 
 
+class RegionTestResult(TypedDict):
+    """Typed contract returned by the regional testing workflow."""
+
+    method: Literal["anova", "kruskal"]
+    method_label: str
+    hypothesis_null: str
+    hypothesis_alternative: str
+    group_statistic_name: str
+    group_summary: pd.Series
+    interpretation: str
+    statistic: float
+    p_value: float
+    alpha: float
+    reject_h0: bool
+    effect_name: str
+    effect_size: float
+    effect_label: str
+    levene_stat: float
+    levene_p: float
+    all_normal: bool
+    equal_variances: bool
+    diagnostics: pd.DataFrame
+    posthoc: pd.DataFrame
+
+
+def mask_imputed_values(
+    df: pd.DataFrame,
+    metrics: list[str],
+) -> tuple[pd.DataFrame, dict[str, int]]:
+    """Mask imputed metric cells so inferential methods use observed values only."""
+    out = df.copy()
+    excluded: dict[str, int] = {}
+    for metric in metrics:
+        flag = f"{metric}_imputed"
+        if flag not in out.columns:
+            excluded[metric] = 0
+            continue
+        mask = out[flag].fillna(False).astype(bool)
+        excluded[metric] = int(mask.sum())
+        out.loc[mask, metric] = np.nan
+    return out, excluded
+
+
 def _finite_series(s: pd.Series) -> pd.Series:
     values = pd.to_numeric(s, errors="coerce")
     return values[np.isfinite(values)].dropna()
+
+
+def _finite_array(s: pd.Series) -> np.ndarray:
+    """Return finite values as a numeric NumPy array with a stable static type."""
+    return _finite_series(s).to_numpy(dtype=float)
 
 
 def _omega_squared(groups: list[np.ndarray]) -> float:
@@ -78,12 +127,16 @@ def pairwise_mann_whitney(
 ) -> pd.DataFrame:
     """Two-sided Mann-Whitney U for every pair of regions."""
     rows = []
-    by_region = {r: _finite_series(g[metric]).values for r, g in df.groupby(region_col)}
+    by_region = {
+        str(region): _finite_array(group[metric])
+        for region, group in df.groupby(region_col)
+    }
     for a, b in combinations(sorted(by_region), 2):
         x, y = by_region[a], by_region[b]
         if len(x) < 3 or len(y) < 3:
             continue
-        u, p = stats.mannwhitneyu(x, y, alternative="two-sided")
+        test_result = stats.mannwhitneyu(x, y, alternative="two-sided")
+        u, p = float(test_result.statistic), float(test_result.pvalue)
         rows.append({
             "group_A": a,
             "group_B": b,
@@ -93,9 +146,9 @@ def pairwise_mann_whitney(
             "mean_B": float(np.mean(y)),
             "median_A": float(np.median(x)),
             "median_B": float(np.median(y)),
-            "U": float(u),
-            "p_value": float(p),
-            "cliffs_delta": _cliffs_delta_from_u(float(u), len(x), len(y)),
+            "U": u,
+            "p_value": p,
+            "cliffs_delta": _cliffs_delta_from_u(u, len(x), len(y)),
         })
 
     out = pd.DataFrame(rows)
@@ -125,9 +178,11 @@ def correlation_matrix(
         if len(sub) < 2 or sub[a].nunique() < 2 or sub[b].nunique() < 2:
             continue
         if method == "spearman":
-            r, _ = stats.spearmanr(sub[a], sub[b])
+            test_result = stats.spearmanr(sub[a], sub[b])
         else:
-            r, _ = stats.pearsonr(sub[a], sub[b])
+            test_result = stats.pearsonr(sub[a], sub[b])
+        r_raw, _ = cast(tuple[float, float], test_result)
+        r = float(r_raw)
         out.loc[a, b] = float(r)
         out.loc[b, a] = float(r)
     return out
@@ -146,16 +201,18 @@ def correlation_significance(
         if len(sub) < 4 or sub[a].nunique() < 2 or sub[b].nunique() < 2:
             continue
         if method == "spearman":
-            r, p = stats.spearmanr(sub[a], sub[b])
+            test_result = stats.spearmanr(sub[a], sub[b])
         else:
-            r, p = stats.pearsonr(sub[a], sub[b])
+            test_result = stats.pearsonr(sub[a], sub[b])
+        r_raw, p_raw = cast(tuple[float, float], test_result)
+        r, p = float(r_raw), float(p_raw)
         rows.append({
             "var_a": a,
             "var_b": b,
             "n": int(len(sub)),
-            "r": float(r),
-            "p_value": float(p),
-            "r_squared": float(r ** 2),
+            "r": r,
+            "p_value": p,
+            "r_squared": r**2,
         })
 
     out = pd.DataFrame(rows)
@@ -174,7 +231,7 @@ def shapiro_by_region(df: pd.DataFrame, metric: str, region_col: str = "region")
     """Shapiro-Wilk normality diagnostics by region."""
     rows = []
     for region, group in df.groupby(region_col):
-        values = _finite_series(group[metric]).values
+        values = _finite_array(group[metric])
         if len(values) < 3:
             rows.append({
                 region_col: region,
@@ -190,12 +247,13 @@ def shapiro_by_region(df: pd.DataFrame, metric: str, region_col: str = "region")
         if len(values) > 5000:
             sample = values[:5000]
             note = "First 5000 observations used"
-        w, p = stats.shapiro(sample)
+        test_result = stats.shapiro(sample)
+        w, p = float(test_result.statistic), float(test_result.pvalue)
         rows.append({
             region_col: region,
             "n": int(len(values)),
-            "w": float(w),
-            "p_value": float(p),
+            "w": w,
+            "p_value": p,
             "normal_05": bool(p >= 0.05),
             "note": note,
         })
@@ -213,21 +271,25 @@ def pvalue_matrix(
     for col in cols:
         out.loc[col, col] = 0.0
 
-    pairs = []
-    p_values = []
+    pairs: list[tuple[str, str]] = []
+    p_values: list[float] = []
     for a, b in combinations(cols, 2):
         sub = df[[a, b]].replace([np.inf, -np.inf], np.nan).dropna()
         if len(sub) < 4 or sub[a].nunique() < 2 or sub[b].nunique() < 2:
             continue
         if method == "spearman":
-            _, p_value = stats.spearmanr(sub[a], sub[b])
+            test_result = stats.spearmanr(sub[a], sub[b])
         else:
-            _, p_value = stats.pearsonr(sub[a], sub[b])
+            test_result = stats.pearsonr(sub[a], sub[b])
+        _, p_raw = cast(tuple[float, float], test_result)
+        p_value = float(p_raw)
         pairs.append((a, b))
         p_values.append(float(p_value))
 
     if p_values:
         _, adjusted, _, _ = multipletests(p_values, alpha=0.05, method=correction)
+        if adjusted is None:
+            raise RuntimeError("Holm correction did not return adjusted p-values.")
         for (a, b), p_value in zip(pairs, adjusted):
             out.loc[a, b] = float(p_value)
             out.loc[b, a] = float(p_value)
@@ -252,14 +314,15 @@ def bootstrap_region_means(
     region_col: str = "region",
     n_boot: int = 2000,
     seed: int = 42,
+    min_group_n: int = 3,
 ) -> pd.DataFrame:
-    """Bootstrap regional means and 95% confidence intervals for a metric."""
+    """Bootstrap regional means when each reported group has enough observations."""
     rng = np.random.default_rng(seed)
     rows = []
 
     for region, group in df.groupby(region_col):
         values = group[metric].dropna().to_numpy()
-        if len(values) == 0:
+        if len(values) < min_group_n:
             continue
         means = [rng.choice(values, size=len(values), replace=True).mean() for _ in range(n_boot)]
         ci_low, ci_high = np.percentile(means, [2.5, 97.5])
@@ -273,7 +336,10 @@ def bootstrap_region_means(
             }
         )
 
-    return pd.DataFrame(rows).sort_values("mean", ascending=False).reset_index(drop=True)
+    out = pd.DataFrame(rows, columns=[region_col, "mean", "ci_low", "ci_high", "n"])
+    if out.empty:
+        return out
+    return out.sort_values("mean", ascending=False).reset_index(drop=True)
 
 
 def iqr_outliers(df: pd.DataFrame, metric: str, n: int = 10) -> pd.DataFrame:
@@ -301,6 +367,8 @@ def iqr_outliers(df: pd.DataFrame, metric: str, n: int = 10) -> pd.DataFrame:
 def _tukey_posthoc(df: pd.DataFrame, metric: str, region_col: str) -> pd.DataFrame:
     sub = df[[region_col, metric]].replace([np.inf, -np.inf], np.nan).dropna()
     result = pairwise_tukeyhsd(sub[metric].astype(float), sub[region_col].astype(str))
+    if result.confint is None:
+        raise RuntimeError("Tukey HSD did not return confidence intervals.")
     pairs = list(combinations(result.groupsunique, 2))
     return pd.DataFrame(
         {
@@ -320,15 +388,18 @@ def select_region_test(
     metric: str,
     region_col: str = "region",
     alpha: float = 0.05,
-) -> dict[str, object]:
+) -> RegionTestResult:
     """Select one omnibus regional test, effect size and conditional post-hoc."""
     grouped = {
-        region: _finite_series(group[metric]).values
+        str(region): _finite_array(group[metric])
         for region, group in df.groupby(region_col)
     }
     grouped = {region: values for region, values in grouped.items() if len(values) >= 2}
     if len(grouped) < 2:
-        raise ValueError("At least two regions with two observations are required.")
+        raise ValueError(
+            "Brak wystarczających danych obserwowanych: wymagane są co najmniej "
+            "dwa regiony z dwiema obserwacjami."
+        )
 
     diagnostics = shapiro_by_region(df, metric, region_col=region_col)
     shapiro_values = diagnostics["p_value"].dropna()

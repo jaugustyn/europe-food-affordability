@@ -39,6 +39,7 @@ REQUIRED_ANALYTIC_COLUMNS = [
     "median_income_eur",
     "median_income_eur_imputed",
     "income_growth_pct",
+    "income_growth_pct_imputed",
     "food_price_level_index",
     "food_price_level_index_imputed",
     "food_share_budget_pct",
@@ -48,5 +49,6 @@ REQUIRED_ANALYTIC_COLUMNS = [
     "minimum_wage_eur_month",
     "minimum_wage_eur_month_imputed",
     "food_affordability_gap_pct",
+    "food_affordability_gap_pct_imputed",
     "food_inflation_index_2020",
 ]
