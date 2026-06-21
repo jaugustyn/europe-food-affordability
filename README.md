@@ -26,10 +26,9 @@ streamlit run app.py
 
 The dashboard is available at `http://localhost:8501` by default.
 
-## Required acceptance sequence
+## Verification
 
-Run acceptance checks in this order so that tests always use freshly generated
-artifacts:
+Run checks in this order so that tests use freshly generated artifacts:
 
 ```powershell
 python etl.py
@@ -49,7 +48,7 @@ The ETL deliberately maintains two different analytical views.
 | country–year | `data/merged.parquet` | `country_code, year` | 480 | KPI, maps, cumulative metrics, correlations, PCA and regional tests |
 | country–year–category | `data/food_categories.parquet` | `country_code, year, food_category_code` | 4,800 | category-level EDA, rankings, distributions and trends |
 
-The category view satisfies the course requirement of at least 1,000 genuine observations. Country-level income and social indicators are contextual variables in this view. They are not treated as 4,800 independent observations in correlations or statistical tests.
+The category view contains 4,800 genuine observations. Country-level income and social indicators are contextual variables in this view. They are not treated as 4,800 independent observations in correlations or statistical tests.
 
 The category pipeline distinguishes three counts: the raw Eurostat grid has 4,950
 country–year–category rows, including 50 missing HICP values; 4,900 HICP values are
@@ -114,7 +113,7 @@ correlations, regional hypothesis tests and PCA.
 
 The PPP adapter prefers a non-null value from `prc_ppp_ind_1` and falls back at the value level to `prc_ppp_ind`. `food_price_level_source` records the source; values filled by the missing-data policy are labelled `interpolated`.
 
-ETL rejects outputs with duplicate keys, fewer than five numeric variables, years outside 2010–2024, infinite values or fewer than 1,000 category observations.
+ETL validates unique keys, the configured year range, numeric schema and finite values before writing analytical outputs.
 
 ## Metrics
 
@@ -226,5 +225,3 @@ europe-food-affordability/
 - Regional groups are analytical groupings with small sample sizes.
 - Pairwise-complete samples can differ between correlations.
 - The 2020–2024 endpoint comparison does not replace inspection of the full time series.
-
-Ridge, Random Forest, panel fixed-effects regression, ARIMA, rule-based country typology and the synthetic vulnerability score were deliberately excluded because they were optional and could not be validated strongly enough within the project's scope.
