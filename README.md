@@ -33,13 +33,12 @@ artifacts:
 
 ```powershell
 python etl.py
-python -m py_compile app.py etl.py src/config.py src/data_loader.py src/etl_pipeline.py src/eurostat_sources.py src/metrics.py src/pca_analysis.py src/stats_tests.py src/transforms.py src/viz.py
+python -m compileall -q app.py etl.py src tests
 python -m pytest -q
-python -m pytest -q tests/test_methodology.py -k streamlit
 ```
 
-Missing ETL artifacts are a test failure, not a skipped test. The final command
-reruns the Streamlit smoke and interaction checks explicitly.
+Missing ETL artifacts are a test failure, not a skipped test. The test suite includes
+the Streamlit smoke test and interaction checks.
 
 ## Analytical grains
 
@@ -73,8 +72,6 @@ The category view uses observed annual HICP rates from `prc_hicp_aind` with unit
 | `CP0118` | Sugar, jam, honey, chocolate and confectionery |
 | `CP0119` | Food products n.e.c. |
 | `CP012` | Non-alcoholic beverages |
-
-Category HICP values are not interpolated. The category view contains only observed Eurostat values joined to valid country–year context.
 
 ## Data sources
 
@@ -160,6 +157,9 @@ Regional inference uses one country observation in the reference year, observed 
 6. Post-hoc runs only after a significant global result: Tukey HSD after ANOVA or pairwise Mann–Whitney with Holm correction and Cliff's delta after Kruskal–Wallis.
 
 Kruskal–Wallis and Mann–Whitney are interpreted as distribution/rank comparisons, not universal tests of medians.
+
+Bootstrap 95% confidence intervals for regional means are a separate descriptive
+analysis. They are reported only for regions with at least three observed values.
 
 ## Dashboard structure
 
